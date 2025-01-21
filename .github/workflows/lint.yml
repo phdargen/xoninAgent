@@ -1,0 +1,155 @@
+name: Lint
+on: [pull_request]
+
+jobs:
+  lint-cdp-agentkit-core-python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./cdp-agentkit-core/python
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: ./cdp-agentkit-core/python/.venv
+          key: venv-agentkit-${{ runner.os }}-${{ hashFiles('cdp-agentkit-core/python/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --with dev
+
+      - name: Run linters
+        run: poetry run make lint
+
+  lint-cdp-langchain-python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./cdp-langchain/python
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: ./cdp-langchain/python/.venv
+          key: venv-langchain-${{ runner.os }}-${{ hashFiles('cdp-langchain/python/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --with dev
+
+      - name: Run linters
+        run: poetry run make lint
+
+  lint-twitter-langchain-python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./twitter-langchain/python
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: ./twitter-langchain/python/.venv
+          key: venv-twitter-langchain-${{ runner.os }}-${{ hashFiles('twitter-langchain/python/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --with dev
+
+      - name: Run linters
+        run: poetry run make lint
+
+  lint-cdp-agentkit-core-typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+      # Install dependencies in parent directory first
+      - run: npm install
+      # Then install and lint in working directory
+      - name: Install and lint @coinbase/cdp-agentkit-core
+        working-directory: ./cdp-agentkit-core/typescript
+        run: |
+          npm install
+          npm run lint
+          npm run format
+
+  lint-cdp-langchain-typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+      - run: npm install
+      - name: Install and lint @coinbase/cdp-langchain
+        working-directory: ./cdp-langchain/typescript
+        run: |
+          npm install
+          npm run lint
+          npm run format
+
+  lint-twitter-langchain-typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+      - run: npm install
+      - name: Install and lint @coinbase/twitter-langchain
+        working-directory: ./twitter-langchain/typescript
+        run: |
+          npm install
+          npm run lint
+          npm run format
