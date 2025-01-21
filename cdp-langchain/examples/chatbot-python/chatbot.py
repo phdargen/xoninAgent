@@ -229,27 +229,41 @@ def check_eth_balance(agent_executor, config, address):
     return False
 
 def send_error_reply(agent_executor, config, tweet_id, error_type, address=None):
-    """Send error reply tweet."""
+    """Send error reply tweet and return reply ID if successful."""
     if error_type == "invalid_address":
         reply_prompt = (
-            f"Use post_tweet_reply to reply to tweet {tweet_id} with this message:\n"
+            f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
             f"'Sorry, the address {address} is not a valid Ethereum address. "
-            "Please make sure to provide a valid 42-character hex address starting with 0x.'"
+            "Please make sure to provide a valid address starting with 0x.'"
+
         )
     elif error_type == "zero_balance":
         reply_prompt = (
-            f"Use post_tweet_reply to reply to tweet {tweet_id} with this message:\n"
+            f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
             f"'Sorry, the address {address} has 0 ETH balance. "
             "Please make sure to fund the address with some ETH before requesting an NFT mint.'"
+            f"Or more humorously like: Why so poor? Get some ETH first."
         )
     
+    reply_id = None
     for chunk in agent_executor.stream(
         {"messages": [HumanMessage(content=reply_prompt)]}, config
     ):
         if "agent" in chunk:
             print(chunk["agent"]["messages"][0].content)
         elif "tools" in chunk:
-            print(chunk["tools"]["messages"][0].content)
+            response = chunk["tools"]["messages"][0].content
+            # Try to extract reply ID from response
+            try:
+                json_start = response.find('{')
+                json_end = response.rfind('}') + 1
+                json_str = response[json_start:json_end]
+                data = json.loads(json_str)
+                if "data" in data and "id" in data["data"]:
+                    reply_id = data["data"]["id"]
+            except:
+                pass
+    return reply_id
 
 class MentionMemory:
     def __init__(self):
@@ -275,14 +289,25 @@ class MentionMemory:
         """Check if a tweet has been processed."""
         return tweet_id in self.processed_mentions
     
-    def add_mention(self, tweet_id, tweet_text, status, mint_success=False):
+    def add_mention(self, tweet_id, tweet_text, status, mint_success=False, tx_hash=None, reply_id=None):
         """Add a processed mention to memory."""
-        self.processed_mentions[tweet_id] = {
+        # Don't save not_mint_request mentions
+        if status == "not_mint_request":
+            return
+            
+        mention_data = {
             "text": tweet_text,
             "status": status,
             "mint_success": mint_success,
             "processed_at": datetime.now(timezone.utc).isoformat()
         }
+        
+        if tx_hash:
+            mention_data["transaction_hash"] = tx_hash
+        if reply_id:
+            mention_data["reply_id"] = reply_id
+            
+        self.processed_mentions[tweet_id] = mention_data
         self.save_memory()
 
 def process_tweet(agent_executor, config, tweet, mention_memory):
@@ -301,27 +326,56 @@ def process_tweet(agent_executor, config, tweet, mention_memory):
     address, status = is_valid_mint_request_with_feedback(tweet_text)
     
     if address is None:
-        mention_memory.add_mention(tweet_id, tweet_text, "not_mint_request")
-        return False  # Not a mint request
+        # Don't save not_mint_request mentions
+        return False
         
     if status == "invalid_address":
         print(f"Invalid address found: {address}")
-        send_error_reply(agent_executor, config, tweet_id, "invalid_address", address)
-        mention_memory.add_mention(tweet_id, tweet_text, "invalid_address")
+        reply_id = send_error_reply(agent_executor, config, tweet_id, "invalid_address", address)
+        mention_memory.add_mention(tweet_id, tweet_text, "invalid_address", reply_id=reply_id)
         return True
         
     # Check ETH balance
     if not check_eth_balance(agent_executor, config, address):
         print(f"Zero balance address found: {address}")
-        send_error_reply(agent_executor, config, tweet_id, "zero_balance", address)
-        mention_memory.add_mention(tweet_id, tweet_text, "zero_balance")
+        reply_id = send_error_reply(agent_executor, config, tweet_id, "zero_balance", address)
+        mention_memory.add_mention(tweet_id, tweet_text, "zero_balance", reply_id=reply_id)
         return True
         
     # If we get here, address is valid and has balance
     print(f"Processing mint request for address: {address}")
     try:
-        process_mint_request(agent_executor, config, tweet_id, address)
-        mention_memory.add_mention(tweet_id, tweet_text, "processed", mint_success=True)
+        tx_hash = None
+        reply_id = None
+        
+        # Process mint request and capture response
+        for chunk in agent_executor.stream(
+            {"messages": [HumanMessage(content=mint_prompt)]}, config
+        ):
+            if "tools" in chunk:
+                response = chunk["tools"]["messages"][0].content
+                # Try to extract transaction hash and reply ID
+                try:
+                    if "transaction hash" in response.lower():
+                        tx_hash = re.search(r'0x[a-fA-F0-9]{64}', response).group(0)
+                    if "post_tweet_reply" in response:
+                        json_start = response.find('{')
+                        json_end = response.rfind('}') + 1
+                        json_str = response[json_start:json_end]
+                        data = json.loads(json_str)
+                        if "data" in data and "id" in data["data"]:
+                            reply_id = data["data"]["id"]
+                except:
+                    pass
+        
+        mention_memory.add_mention(
+            tweet_id, 
+            tweet_text, 
+            "processed", 
+            mint_success=True,
+            tx_hash=tx_hash,
+            reply_id=reply_id
+        )
     except Exception as e:
         print(f"Error minting NFT: {e}")
         mention_memory.add_mention(tweet_id, tweet_text, "mint_failed")
