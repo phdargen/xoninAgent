@@ -27,25 +27,43 @@ class AccountMentionsInput(BaseModel):
         ...,
         description="The account id for the Twitter (X) user to get mentions for",
     )
+    since_id: str | None = Field(
+        None,
+        description="Returns only mentions after this tweet ID"
+    )
+    max_results: int | None = Field(
+        None,
+        description="The maximum number of results to return"
+    )
 
 
-def account_mentions(client: tweepy.Client, account_id: str) -> str:
+def account_mentions(client: tweepy.Client, account_id: str, since_id: str | None = None, max_results: int | None = None) -> str:
     """Get the authenticated Twitter (X) user account mentions.
 
     Args:
         client (tweepy.Client): The Twitter (X) client used to authenticate with.
-        account_id (str): The Twitter (X) account id to  get mentions for.
+        account_id (str): The Twitter (X) account id to get mentions for.
+        since_id (str, optional): Returns only mentions after this tweet ID.
+        max_results (int, optional): The maximum number of results to return.
 
     Returns:
         str: A message containing account mentions for the authenticated user context.
-
     """
     message = ""
 
-    print(f"attempting to get mentions for account_id: {account_id}")
+    print(f"attempting to get last {max_results} mentions for account_id: {account_id} since_id: {since_id}")
 
     try:
-        response = client.get_users_mentions(account_id)
+        params = {
+            "expansions": "author_id",
+            "user_fields": ["username"]
+        }
+        if max_results:
+            params["max_results"] = max_results
+        if since_id:
+            params["since_id"] = since_id
+
+        response = client.get_users_mentions(account_id, **params)
         message = f"Successfully retrieved authenticated user account mentions:\n{dumps(response)}"
     except tweepy.errors.TweepyException as e:
         message = f"Error retrieving authenticated user account mentions:\n{e}"

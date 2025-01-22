@@ -462,18 +462,20 @@ name = "cdp-agentkit-core"
 version = "0.0.9"
 description = "CDP Agentkit core primitives"
 optional = false
-python-versions = "<4.0,>=3.10"
+python-versions = "^3.10"
 groups = ["main"]
 markers = "python_version == \"3.10\" or python_version == \"3.11\" or python_version >= \"3.12\""
-files = [
-    {file = "cdp_agentkit_core-0.0.9-py3-none-any.whl", hash = "sha256:70bc767ac04d5b150b7799c190cc2bbcf506b010520dd5a22f0377cd8eb7e6f3"},
-    {file = "cdp_agentkit_core-0.0.9.tar.gz", hash = "sha256:1a126c250eb13147cab25e6e1611068fcaa58a864e96949d486d20d37cf5d63a"},
-]
+files = []
+develop = true
 
 [package.dependencies]
-cdp-sdk = ">=0.14.1,<0.15.0"
-pydantic = ">=2.0,<3.0"
-web3 = ">=7.6.0,<8.0.0"
+cdp-sdk = "^0.14.1"
+pydantic = "^2.0"
+web3 = "^7.6.0"
+
+[package.source]
+type = "directory"
+url = "../../../cdp-agentkit-core/python"
 
 [[package]]
 name = "cdp-langchain"
@@ -3679,4 +3681,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "57b2204935182457b073b00aed27168071d142c1e6ca9e6a60ca29d95df6499c"
+content-hash = "a8860d6f504c2d106eab32d3bd137eda67ab545d011ccf352b4e92de11c65d31"
