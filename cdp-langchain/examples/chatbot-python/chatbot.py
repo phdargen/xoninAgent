@@ -15,6 +15,11 @@ from langgraph.prebuilt import create_react_agent
 from cdp_langchain.agent_toolkits import CdpToolkit
 from cdp_langchain.utils import CdpAgentkitWrapper
 from twitter_langchain import TwitterApiWrapper, TwitterToolkit
+from cdp_langchain.tools import CdpTool
+from decimal import Decimal
+from pydantic import BaseModel, Field
+from cdp import Wallet
+from cdp.smart_contract import SmartContract
 
 # Configure files to persist data
 wallet_data_file = "wallet_data.txt"
@@ -28,9 +33,150 @@ DEBUG_MODE = False
 DUMMY_MENTIONS_FILE = "dummy_mentions.txt"
 MENTION_MEMORY_FILE = "mention_memory.txt"
 
+
+abi = [
+        {
+            "inputs": [{"internalType": "address", "name": "owner", "type": "address"}],
+            "name": "balanceOf",
+            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [
+                {"internalType": "address", "name": "owner", "type": "address"},
+                {"internalType": "uint256", "name": "index", "type": "uint256"}
+            ],
+            "name": "tokenOfOwnerByIndex",
+            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [],
+            "name": "mintNFT",
+            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+            "stateMutability": "payable",
+            "type": "function"
+        },
+        {
+            "inputs": [
+                {"internalType": "address", "name": "from", "type": "address"},
+                {"internalType": "address", "name": "to", "type": "address"},
+                {"internalType": "uint256", "name": "tokenId", "type": "uint256"}
+            ],
+            "name": "transferFrom",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function"
+        }
+    ]
+
+MINT_MYNFT_PROMPT = """
+This tool will mint a Xonin NFT (ERC-721) by paying 0.001 ETH to the contract.
+The NFT will be minted to the caller's address.
+The maximum supply is 10,000 NFTs.
+"""
+
+class MintMyNftInput(BaseModel):
+    """Input argument schema for mint XoninNFT action."""
+    # contract_address: str = Field(
+    #     ...,
+    #     description="The contract address of the Path NFT (ERC-721) to mint"
+    # )
+
+def mint_myNft(wallet: Wallet) -> str:
+    """Mint a Xonin NFT by paying 0.001 ETH.
+
+    Args:
+      wallet (Wallet): The wallet to sign the message from.
+
+    Returns:
+        str: A message containing the NFT mint details.
+    """
+    price = Decimal("0.001")
+  
+    try:
+        mint_invocation = wallet.invoke_contract(
+            contract_address="0x15077415012b6f5a6F2842928886B51e0E2CB2D6",
+            abi=abi,
+            method="mintNFT",
+            amount=price,
+            asset_id="eth"
+        ).wait()
+    except Exception as e:
+        return f"Error minting NFT: {e!s}"
+
+    return f"Minted Xonin NFT on network {wallet.network_id}.\nTransaction hash: {mint_invocation.transaction.transaction_hash}\nTransaction link: {mint_invocation.transaction.transaction_link}"
+
+GET_BALANCE_MYNFT_PROMPT = """
+This tool will get the Xonin NFTs (ERC721 tokens) owned by the wallet for a specific NFT contract.
+
+It takes the following inputs:
+- contract_address: The NFT contract address to check
+- address: (Optional) The address to check NFT balance for. If not provided, uses the wallet's default address
+"""
+
+class GetBalanceMyNftInput(BaseModel):
+    """Input argument schema for get Xonin NFT balance action."""
+
+    contract_address: str = Field(..., description="The NFT contract address to check balance for")
+    address: str | None = Field(
+        None,
+        description="The address to check NFT balance for. If not provided, uses the wallet's default address",
+    )
+
+
+def get_balance_myNft(
+    wallet: Wallet,
+    contract_address: str,
+    address: str | None = None,
+) -> str:
+    """Get Xonin NFT balance for a specific contract."""
+
+    try:
+        check_address = address if address is not None else wallet.default_address.address_id
+
+        # First get the total number of tokens owned
+        balance = SmartContract.read(
+            wallet.network_id, 
+            contract_address, 
+            abi=abi, 
+            method="balanceOf", 
+            args={"owner": check_address}
+        )
+
+        if balance == 0:
+            return f"Address {check_address} owns no NFTs in contract {contract_address}"
+        else: print(f"Balance: {balance}")
+        
+        # Then get each token ID using tokenOfOwnerByIndex
+        owned_tokens = []
+        for i in range(balance):
+            token_id = SmartContract.read(
+                wallet.network_id,
+                contract_address,
+                abi=abi,
+                method="tokenOfOwnerByIndex",
+                args={
+                    "owner": check_address,
+                    "index": str(i)
+                }
+            )
+            owned_tokens.append(token_id)
+
+        token_list = ", ".join(str(token_id) for token_id in owned_tokens)
+        return f"Address {check_address} owns {len(owned_tokens)} NFTs in contract {contract_address}.\nToken IDs: {token_list}"
+
+    except Exception as e:
+        return f"Error getting Xonin NFT balance for address {check_address} in contract {contract_address}: {e!s}"
+
+
+
+####
 def is_valid_mint_request(tweet_text):
     """Check if tweet contains valid mint request and extract address."""
-    pattern = r"Mint nft to (0x[a-fA-F0-9]{40})"
+    pattern = r"(?i)mint.*?to\s+(0x[a-fA-F0-9]+)"
     match = re.search(pattern, tweet_text)
     if match and is_address(match.group(1)):
         return match.group(1)
@@ -38,13 +184,6 @@ def is_valid_mint_request(tweet_text):
 
 def process_mint_request(agent_executor, config, tweet_id, eth_address):
     """Process an NFT mint request."""
-    # First, check wallet details and ensure we're on the right network
-    wallet_prompt = "Get wallet details to check network."
-    for chunk in agent_executor.stream(
-        {"messages": [HumanMessage(content=wallet_prompt)]}, config
-    ):
-        if "agent" in chunk:
-            print(chunk["agent"]["messages"][0].content)
 
     # Construct mint instruction with explicit reply requirement
     mint_prompt = (
@@ -94,9 +233,80 @@ def initialize_agent():
 
     # Initialize CDP 
     cdp_toolkit = CdpToolkit.from_cdp_agentkit_wrapper(agentkit)
-    
+    mintNftTool = CdpTool(
+        name="mint_myNft",
+        description=MINT_MYNFT_PROMPT,
+        cdp_agentkit_wrapper=agentkit,
+        args_schema=MintMyNftInput,
+        func=mint_myNft,
+    )
+    getBalanceMyNftTool = CdpTool(
+        name="get_balance_myNft",
+        description=GET_BALANCE_MYNFT_PROMPT,
+        cdp_agentkit_wrapper=agentkit,
+        args_schema=GetBalanceMyNftInput,
+        func=get_balance_myNft,
+    )
+
+    # Add after GET_BALANCE_MYNFT_PROMPT
+    TRANSFER_MYNFT_PROMPT = """
+    This tool will transfer a Xonin NFT (ERC-721) to another address.
+    It takes the following inputs:
+    - to_address: The address to transfer the NFT to
+    - token_id: The ID of the NFT to transfer
+    """
+
+    class TransferMyNftInput(BaseModel):
+        """Input argument schema for transfer Xonin NFT action."""
+        to_address: str = Field(..., description="The address to transfer the NFT to")
+        token_id: int = Field(..., description="The ID of the NFT to transfer")
+
+    def transfer_myNft(
+        wallet: Wallet,
+        to_address: str,
+        token_id: int,
+    ) -> str:
+        """Transfer a Xonin NFT to another address.
+
+        Args:
+            wallet (Wallet): The wallet to sign the transfer from
+            to_address (str): The address to transfer the NFT to
+            token_id (int): The ID of the NFT to transfer
+
+        Returns:
+            str: A message containing the transfer details
+        """
+        try:
+            # Call transferFrom function
+            transfer_invocation = wallet.invoke_contract(
+                contract_address="0x15077415012b6f5a6F2842928886B51e0E2CB2D6",
+                abi=abi,
+                method="transferFrom",
+                args={
+                    "from": wallet.default_address.address_id,
+                    "to": to_address,
+                    "tokenId": str(token_id)
+                }
+            ).wait()
+
+            return (f"Transferred Xonin NFT #{token_id} to {to_address} on network {wallet.network_id}.\n"
+                    f"Transaction hash: {transfer_invocation.transaction.transaction_hash}\n"
+                    f"Transaction link: {transfer_invocation.transaction.transaction_link}")
+
+        except Exception as e:
+            return f"Error transferring Xonin NFT: {e!s}"
+
+    # Add in initialize_agent() after getBalanceMyNftTool
+    transferNftTool = CdpTool(
+        name="transfer_myNft",
+        description=TRANSFER_MYNFT_PROMPT,
+        cdp_agentkit_wrapper=agentkit,
+        args_schema=TransferMyNftInput,
+        func=transfer_myNft,
+    )
+
     # Combine tools from both toolkits
-    tools = cdp_toolkit.get_tools() + twitter_tools
+    tools = twitter_tools + [mintNftTool, getBalanceMyNftTool, transferNftTool]
 
     # Store buffered conversation history in memory.
     memory = MemorySaver()
@@ -219,7 +429,8 @@ def get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id
 
 def is_valid_mint_request_with_feedback(tweet_text):
     """Check if tweet contains mint request and provide feedback."""
-    pattern = r"Mint nft to (0x[a-fA-F0-9]+)"  # Changed to match any length hex
+    # Case insensitive search for 'mint' and 'to' followed by an address
+    pattern = r"(?i)mint.*?to\s+(0x[a-fA-F0-9]+)"
     match = re.search(pattern, tweet_text)
     if not match:
         return None, None
@@ -253,21 +464,20 @@ def send_error_reply(agent_executor, config, tweet_id, error_type, address=None,
     if error_type == "invalid_address":
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"{greeting}Sorry, the address {address} is not a valid Ethereum address. "
-            "Please make sure to provide a valid address starting with 0x.'"
+            f"'{greeting}Sorry, the address {address} is not a valid Ethereum address. "
+            "Please make sure to provide a valid address starting with 0x. You can always mint your NFT at https://xonin.vercel.app/.' Be creative in conveying this message!"
         )
     elif error_type == "zero_balance":
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"{greeting}Sorry, the address {address} has 0 ETH balance. "
-            "Please make sure to fund the address with some ETH before requesting an NFT mint.' "
-            f"Or more humorously like: '{greeting}Why so poor? Get some ETH first.'"
+            f"'{greeting}Sorry, the address {address} has 0 ETH balance. Please provide an active address. You can always mint your NFT at https://xonin.vercel.app/.'"
+            f"Or more humorously like: '{greeting}Why so poor? Get some ETH first.' Be creative in conveying this message!"
         )
     elif error_type == "already_minted":
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"{greeting}You have already received an NFT from us (see tweet {previous_tweet_id}). "
-            "This is limited to one NFT per user, don't be greedy! '"
+            f"'{greeting}You have already minted an NFT (see tweet {previous_tweet_id}). "
+            "This is limited to one NFT per user, don't be greedy! You can mint another one yourself at https://xonin.vercel.app/.' Be creative in conveying this message!"
         )
     
     reply_id = None
@@ -504,7 +714,7 @@ def run_autonomous_mode(agent_executor, config, tools, twitter_wrapper, interval
     while True:
         try:
             # Get mentions (either from API or dummy file)
-            all_tweets = get_all_mentions(account_mentions_tool, account_id, max_results=1, since_id=mention_memory.last_tweet_id)
+            all_tweets = get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id=mention_memory.last_tweet_id)
             mentions_found = False
             
             # Process all tweets
@@ -583,8 +793,8 @@ def main():
     """Start the chatbot agent."""
     agent_executor, config, tools, twitter_wrapper = initialize_agent()  # Get twitter_wrapper from initialize_agent
 
-    # For this NFT minting bot, we'll only run in autonomous mode
-    run_autonomous_mode(agent_executor=agent_executor, config=config, tools=tools, twitter_wrapper=twitter_wrapper)
+    run_chat_mode(agent_executor=agent_executor, config=config)
+    # run_autonomous_mode(agent_executor=agent_executor, config=config, tools=tools, twitter_wrapper=twitter_wrapper)
 
 
 if __name__ == "__main__":
