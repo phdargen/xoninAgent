@@ -26,7 +26,7 @@ wallet_data_file = "wallet_data.txt"
 last_check_file = "last_check_time.txt"
 
 # NFT Contract configuration
-NFT_CONTRACT_ADDRESS = "0x4B9523186371F5a805d2EF882Cf0c6a52120deF8"
+NFT_CONTRACT_ADDRESS = "0x0786381a49845E53ff2FE59f9bc5e4374397d816"
 
 # Add at the top with other constants
 DEBUG_MODE = False
@@ -35,79 +35,47 @@ MENTION_MEMORY_FILE = "mention_memory.txt"
 
 
 abi = [
-        {
-            "inputs": [{"internalType": "address", "name": "owner", "type": "address"}],
-            "name": "balanceOf",
-            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-            "stateMutability": "view",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {"internalType": "address", "name": "owner", "type": "address"},
-                {"internalType": "uint256", "name": "index", "type": "uint256"}
-            ],
-            "name": "tokenOfOwnerByIndex",
-            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-            "stateMutability": "view",
-            "type": "function"
-        },
-        {
-            "inputs": [],
-            "name": "mintNFT",
-            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-            "stateMutability": "payable",
-            "type": "function"
-        },
-        {
-            "inputs": [
-                {"internalType": "address", "name": "from", "type": "address"},
-                {"internalType": "address", "name": "to", "type": "address"},
-                {"internalType": "uint256", "name": "tokenId", "type": "uint256"}
-            ],
-            "name": "transferFrom",
-            "outputs": [],
-            "stateMutability": "nonpayable",
-            "type": "function"
-        }
-    ]
+    {
+        "inputs": [{"internalType": "address", "name": "recipient", "type": "address"}],
+        "name": "mintAndTransfer",
+        "outputs": [],
+        "stateMutability": "payable",
+        "type": "function"
+    }
+]
 
 MINT_MYNFT_PROMPT = """
-This tool will mint a Xonin NFT (ERC-721) by paying 0.001 ETH to the contract.
-The NFT will be minted to the caller's address.
-The maximum supply is 10,000 NFTs.
+This tool will mint a Xonin NFT and transfer it directly to the specified address by paying 0.001 ETH.
+The NFT will be minted and transferred in a single transaction.
 """
 
 class MintMyNftInput(BaseModel):
     """Input argument schema for mint XoninNFT action."""
-    # contract_address: str = Field(
-    #     ...,
-    #     description="The contract address of the Path NFT (ERC-721) to mint"
-    # )
+    recipient_address: str = Field(
+        ...,
+        description="The address that will receive the minted NFT"
+    )
 
-def mint_myNft(wallet: Wallet) -> str:
-    """Mint a Xonin NFT by paying 0.001 ETH.
-
-    Args:
-      wallet (Wallet): The wallet to sign the message from.
-
-    Returns:
-        str: A message containing the NFT mint details.
-    """
+def mint_myNft(wallet: Wallet, recipient_address: str) -> str:
+    """Mint a Xonin NFT and transfer it to the specified address."""
     price = Decimal("0.001")
   
     try:
         mint_invocation = wallet.invoke_contract(
-            contract_address="0x15077415012b6f5a6F2842928886B51e0E2CB2D6",
+            contract_address=NFT_CONTRACT_ADDRESS,
             abi=abi,
-            method="mintNFT",
+            method="mintAndTransfer",
+            args={"recipient": recipient_address},
             amount=price,
-            asset_id="eth"
+            asset_id="eth",
         ).wait()
-    except Exception as e:
-        return f"Error minting NFT: {e!s}"
 
-    return f"Minted Xonin NFT on network {wallet.network_id}.\nTransaction hash: {mint_invocation.transaction.transaction_hash}\nTransaction link: {mint_invocation.transaction.transaction_link}"
+        return (f"Minted and transferred Xonin NFT to {recipient_address} on network {wallet.network_id}.\n"
+                f"Transaction hash: {mint_invocation.transaction.transaction_hash}\n"
+                f"Transaction link: {mint_invocation.transaction.transaction_link}")
+
+    except Exception as e:
+        return f"Error minting and transferring NFT: {e!s}"
 
 GET_BALANCE_MYNFT_PROMPT = """
 This tool will get the Xonin NFTs (ERC721 tokens) owned by the wallet for a specific NFT contract.
@@ -240,13 +208,6 @@ def initialize_agent():
         args_schema=MintMyNftInput,
         func=mint_myNft,
     )
-    getBalanceMyNftTool = CdpTool(
-        name="get_balance_myNft",
-        description=GET_BALANCE_MYNFT_PROMPT,
-        cdp_agentkit_wrapper=agentkit,
-        args_schema=GetBalanceMyNftInput,
-        func=get_balance_myNft,
-    )
 
     # Add after GET_BALANCE_MYNFT_PROMPT
     TRANSFER_MYNFT_PROMPT = """
@@ -306,7 +267,7 @@ def initialize_agent():
     )
 
     # Combine tools from both toolkits
-    tools = twitter_tools + [mintNftTool, getBalanceMyNftTool, transferNftTool]
+    tools = twitter_tools + [mintNftTool, transferNftTool]
 
     # Store buffered conversation history in memory.
     memory = MemorySaver()
