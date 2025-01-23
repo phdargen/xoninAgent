@@ -5,6 +5,12 @@ import re
 import json
 from eth_utils import is_address
 from datetime import datetime, timezone
+import requests
+from urllib.parse import unquote
+from decimal import Decimal
+import io
+from PIL import Image
+import base64
 
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
@@ -16,7 +22,6 @@ from cdp_langchain.agent_toolkits import CdpToolkit
 from cdp_langchain.utils import CdpAgentkitWrapper
 from twitter_langchain import TwitterApiWrapper, TwitterToolkit
 from cdp_langchain.tools import CdpTool
-from decimal import Decimal
 from pydantic import BaseModel, Field
 from cdp import Wallet
 from cdp.smart_contract import SmartContract
@@ -26,13 +31,17 @@ wallet_data_file = "wallet_data.txt"
 last_check_file = "last_check_time.txt"
 
 # NFT Contract configuration
-NFT_CONTRACT_ADDRESS = "0x0786381a49845E53ff2FE59f9bc5e4374397d816"
+NFT_CONTRACT_ADDRESS = "0x32f75546e56aEC829ce13A9b73d4ebb42bF56b9c"
 
 # Add at the top with other constants
-DEBUG_MODE = False
+DEBUG_MODE = True
 DUMMY_MENTIONS_FILE = "dummy_mentions.txt"
 MENTION_MEMORY_FILE = "mention_memory.txt"
 
+# Remove the hardcoded API key and get it from environment
+etherscan_api_key = os.getenv('ETHERSCAN_API_KEY')
+if not etherscan_api_key:
+    raise ValueError("ETHERSCAN_API_KEY environment variable is not set")
 
 abi = [
     {
@@ -43,6 +52,18 @@ abi = [
         "type": "function"
     }
 ]
+
+def get_transaction_data(tx_hash):
+    url = f"https://api-sepolia.basescan.org/api?module=proxy&action=eth_getTransactionReceipt&txhash={tx_hash}&apikey={etherscan_api_key}"
+
+    response = requests.get(url)
+    data = response.json()
+
+    last_log = data['result']['logs'][-1]
+    int_value = int(last_log['topics'][3], 16)
+    contract_address = last_log['address']
+
+    return int_value, contract_address
 
 MINT_MYNFT_PROMPT = """
 This tool will mint a Xonin NFT and transfer it directly to the specified address by paying 0.001 ETH.
@@ -55,6 +76,62 @@ class MintMyNftInput(BaseModel):
         ...,
         description="The address that will receive the minted NFT"
     )
+
+def save_svg_to_png(token_id: int, svg_data: str):
+    """Convert SVG to PNG using PIL."""
+    # First save SVG to file
+    svg_filename = f"nft_{token_id}.svg"
+    with open(svg_filename, 'w') as f:
+        f.write(svg_data)
+        
+    # Convert SVG data to PNG using PIL
+    # First convert SVG data to base64
+    svg_bytes = svg_data.encode('utf-8')
+    svg_base64 = base64.b64encode(svg_bytes).decode('utf-8')
+    
+    # Create a data URL
+    data_url = f"data:image/svg+xml;base64,{svg_base64}"
+    
+    # Open the image from the data URL
+    response = requests.get(data_url)
+    img = Image.open(io.BytesIO(response.content))
+    
+    # Save as PNG
+    png_filename = f"nft_{token_id}.png"
+    img.save(png_filename, 'PNG')
+    
+    return svg_filename, png_filename
+
+def get_token_uri_and_svg(wallet: Wallet, contract_address: str, token_id: int) -> tuple[str, str, str]:
+    """Get tokenURI and extract name and SVG from the response."""
+    try:
+        # Call tokenURI function
+        token_uri = SmartContract.read(
+            wallet.network_id,
+            contract_address,
+            abi=[{
+                "inputs": [{"internalType": "uint256", "name": "tokenId", "type": "uint256"}],
+                "name": "tokenURI",
+                "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+                "stateMutability": "view",
+                "type": "function"
+            }],
+            method="tokenURI",
+            args={"tokenId": str(token_id)}
+        )
+
+        # Extract the JSON part after data:application/json;utf8,
+        json_str = token_uri.split('data:application/json;utf8,')[1]
+        json_data = json.loads(unquote(json_str))
+        
+        # Extract name and SVG
+        name = json_data['name']
+        svg_data = json_data['image'].split('data:image/svg+xml;utf8,')[1]
+        
+        return token_uri, name, svg_data
+
+    except Exception as e:
+        return None, None, f"Error getting token URI and SVG: {e!s}"
 
 def mint_myNft(wallet: Wallet, recipient_address: str) -> str:
     """Mint a Xonin NFT and transfer it to the specified address."""
@@ -70,9 +147,18 @@ def mint_myNft(wallet: Wallet, recipient_address: str) -> str:
             asset_id="eth",
         ).wait()
 
-        return (f"Minted and transferred Xonin NFT to {recipient_address} on network {wallet.network_id}.\n"
-                f"Transaction hash: {mint_invocation.transaction.transaction_hash}\n"
-                f"Transaction link: {mint_invocation.transaction.transaction_link}")
+        token_id, nft_mint_address = get_transaction_data(mint_invocation.transaction.transaction_hash)
+        
+        # Get token URI, name and SVG after minting
+        token_uri, name, svg_data = get_token_uri_and_svg(wallet, nft_mint_address, token_id)
+
+        # Save both SVG and PNG
+        svg_file, png_file = save_svg_to_png(token_id, svg_data)
+
+        return (f"🎉 Successfully minted {name} for {recipient_address}!\n\n"
+                f"🔗 Transaction: {mint_invocation.transaction.transaction_link}\n"
+                f"🖼️ Your unique NFT has been saved to: {png_file}\n\n"
+                f"#NFT #Xonin #OnChainArt")
 
     except Exception as e:
         return f"Error minting and transferring NFT: {e!s}"
@@ -152,23 +238,53 @@ def is_valid_mint_request(tweet_text):
 
 def process_mint_request(agent_executor, config, tweet_id, eth_address):
     """Process an NFT mint request."""
+    try:
+        # Get Twitter API wrapper from tools
+        twitter_tool = next(
+            tool for tool in agent_executor.tools 
+            if isinstance(tool, TwitterToolkit)
+        )
+        twitter_api = twitter_tool.twitter_api_wrapper.api
 
-    # Construct mint instruction with explicit reply requirement
-    mint_prompt = (
-        f"Follow these steps:\n"
-        f"1. Mint an NFT from contract {NFT_CONTRACT_ADDRESS} to address {eth_address}\n"
-        f"2. After successful minting, use the post_tweet_reply action to reply to tweet ID {tweet_id} "
-        f"with the transaction hash and a personalized message to the user.\n"
-        f"Make sure to use post_tweet_reply and not post_tweet. "
-    )
-    
-    for chunk in agent_executor.stream(
-        {"messages": [HumanMessage(content=mint_prompt)]}, config
-    ):
-        if "agent" in chunk:
-            print(chunk["agent"]["messages"][0].content)
-        elif "tools" in chunk:
-            print(chunk["tools"]["messages"][0].content)
+        # Mint NFT and get response
+        mint_response = mint_myNft(agent_executor.wallet, eth_address)
+        
+        # Extract SVG filename from response
+        svg_file = re.search(r'nft_\d+\.svg', mint_response)
+        if not svg_file:
+            raise ValueError("Could not find SVG file in mint response")
+        
+        svg_file = svg_file.group(0)
+        
+        # Upload SVG media to Twitter
+        media = twitter_api.media_upload(svg_file)
+        media_id = media.media_id_string
+        
+        # Construct tweet with media
+        tweet_text = mint_response
+        twitter_api.update_status(
+            status=tweet_text,
+            in_reply_to_status_id=tweet_id,
+            media_ids=[media_id]
+        )
+        
+        # Clean up files
+        try:
+            os.remove(svg_file)
+        except Exception as e:
+            print(f"Warning: Could not clean up files: {e}")
+
+    except Exception as e:
+        error_msg = f"Error processing mint request: {str(e)}"
+        print(error_msg)
+        # Try to reply with error message
+        try:
+            twitter_api.update_status(
+                status=f"Sorry, there was an error processing your mint request: {str(e)}",
+                in_reply_to_status_id=tweet_id
+            )
+        except:
+            print("Could not send error message tweet")
 
 def initialize_agent():
     """Initialize the agent with CDP Agentkit."""
@@ -267,7 +383,7 @@ def initialize_agent():
     )
 
     # Combine tools from both toolkits
-    tools = twitter_tools + [mintNftTool, transferNftTool]
+    tools = twitter_tools + [mintNftTool, transferNftTool]  + cdp_toolkit.get_tools()
 
     # Store buffered conversation history in memory.
     memory = MemorySaver()
@@ -755,7 +871,7 @@ def main():
     agent_executor, config, tools, twitter_wrapper = initialize_agent()  # Get twitter_wrapper from initialize_agent
 
     run_chat_mode(agent_executor=agent_executor, config=config)
-    # run_autonomous_mode(agent_executor=agent_executor, config=config, tools=tools, twitter_wrapper=twitter_wrapper)
+    #run_autonomous_mode(agent_executor=agent_executor, config=config, tools=tools, twitter_wrapper=twitter_wrapper)
 
 
 if __name__ == "__main__":
