@@ -8,9 +8,6 @@ from datetime import datetime, timezone
 import requests
 from urllib.parse import unquote
 from decimal import Decimal
-import io
-from PIL import Image
-import base64
 
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
@@ -25,6 +22,11 @@ from cdp_langchain.tools import CdpTool
 from pydantic import BaseModel, Field
 from cdp import Wallet
 from cdp.smart_contract import SmartContract
+from cdp.address import Address
+import tweepy
+
+# Settings
+# ---------
 
 # Configure files to persist data
 wallet_data_file = "wallet_data.txt"
@@ -32,13 +34,13 @@ last_check_file = "last_check_time.txt"
 
 # NFT Contract configuration
 NFT_CONTRACT_ADDRESS = "0x32f75546e56aEC829ce13A9b73d4ebb42bF56b9c"
+NFT_PRICE = Decimal("0.001") # in ETH
 
 # Add at the top with other constants
 DEBUG_MODE = True
 DUMMY_MENTIONS_FILE = "dummy_mentions.txt"
 MENTION_MEMORY_FILE = "mention_memory.txt"
 
-# Remove the hardcoded API key and get it from environment
 etherscan_api_key = os.getenv('ETHERSCAN_API_KEY')
 if not etherscan_api_key:
     raise ValueError("ETHERSCAN_API_KEY environment variable is not set")
@@ -53,529 +55,8 @@ abi = [
     }
 ]
 
-def get_transaction_data(tx_hash):
-    url = f"https://api-sepolia.basescan.org/api?module=proxy&action=eth_getTransactionReceipt&txhash={tx_hash}&apikey={etherscan_api_key}"
-
-    response = requests.get(url)
-    data = response.json()
-
-    last_log = data['result']['logs'][-1]
-    int_value = int(last_log['topics'][3], 16)
-    contract_address = last_log['address']
-
-    return int_value, contract_address
-
-MINT_MYNFT_PROMPT = """
-This tool will mint a Xonin NFT and transfer it directly to the specified address by paying 0.001 ETH.
-The NFT will be minted and transferred in a single transaction.
-"""
-
-class MintMyNftInput(BaseModel):
-    """Input argument schema for mint XoninNFT action."""
-    recipient_address: str = Field(
-        ...,
-        description="The address that will receive the minted NFT"
-    )
-
-def save_svg_to_png(token_id: int, svg_data: str):
-    """Convert SVG to PNG using PIL."""
-    # First save SVG to file
-    svg_filename = f"nft_{token_id}.svg"
-    with open(svg_filename, 'w') as f:
-        f.write(svg_data)
-        
-    # Convert SVG data to PNG using PIL
-    # First convert SVG data to base64
-    svg_bytes = svg_data.encode('utf-8')
-    svg_base64 = base64.b64encode(svg_bytes).decode('utf-8')
-    
-    # Create a data URL
-    data_url = f"data:image/svg+xml;base64,{svg_base64}"
-    
-    # Open the image from the data URL
-    response = requests.get(data_url)
-    img = Image.open(io.BytesIO(response.content))
-    
-    # Save as PNG
-    png_filename = f"nft_{token_id}.png"
-    img.save(png_filename, 'PNG')
-    
-    return svg_filename, png_filename
-
-def get_token_uri_and_svg(wallet: Wallet, contract_address: str, token_id: int) -> tuple[str, str, str]:
-    """Get tokenURI and extract name and SVG from the response."""
-    try:
-        # Call tokenURI function
-        token_uri = SmartContract.read(
-            wallet.network_id,
-            contract_address,
-            abi=[{
-                "inputs": [{"internalType": "uint256", "name": "tokenId", "type": "uint256"}],
-                "name": "tokenURI",
-                "outputs": [{"internalType": "string", "name": "", "type": "string"}],
-                "stateMutability": "view",
-                "type": "function"
-            }],
-            method="tokenURI",
-            args={"tokenId": str(token_id)}
-        )
-
-        # Extract the JSON part after data:application/json;utf8,
-        json_str = token_uri.split('data:application/json;utf8,')[1]
-        json_data = json.loads(unquote(json_str))
-        
-        # Extract name and SVG
-        name = json_data['name']
-        svg_data = json_data['image'].split('data:image/svg+xml;utf8,')[1]
-        
-        return token_uri, name, svg_data
-
-    except Exception as e:
-        return None, None, f"Error getting token URI and SVG: {e!s}"
-
-def mint_myNft(wallet: Wallet, recipient_address: str) -> str:
-    """Mint a Xonin NFT and transfer it to the specified address."""
-    price = Decimal("0.001")
-  
-    try:
-        mint_invocation = wallet.invoke_contract(
-            contract_address=NFT_CONTRACT_ADDRESS,
-            abi=abi,
-            method="mintAndTransfer",
-            args={"recipient": recipient_address},
-            amount=price,
-            asset_id="eth",
-        ).wait()
-
-        token_id, nft_mint_address = get_transaction_data(mint_invocation.transaction.transaction_hash)
-        
-        # Get token URI, name and SVG after minting
-        token_uri, name, svg_data = get_token_uri_and_svg(wallet, nft_mint_address, token_id)
-
-        # Save both SVG and PNG
-        svg_file, png_file = save_svg_to_png(token_id, svg_data)
-
-        return (f"🎉 Successfully minted {name} for {recipient_address}!\n\n"
-                f"🔗 Transaction: {mint_invocation.transaction.transaction_link}\n"
-                f"🖼️ Your unique NFT has been saved to: {png_file}\n\n"
-                f"#NFT #Xonin #OnChainArt")
-
-    except Exception as e:
-        return f"Error minting and transferring NFT: {e!s}"
-
-GET_BALANCE_MYNFT_PROMPT = """
-This tool will get the Xonin NFTs (ERC721 tokens) owned by the wallet for a specific NFT contract.
-
-It takes the following inputs:
-- contract_address: The NFT contract address to check
-- address: (Optional) The address to check NFT balance for. If not provided, uses the wallet's default address
-"""
-
-class GetBalanceMyNftInput(BaseModel):
-    """Input argument schema for get Xonin NFT balance action."""
-
-    contract_address: str = Field(..., description="The NFT contract address to check balance for")
-    address: str | None = Field(
-        None,
-        description="The address to check NFT balance for. If not provided, uses the wallet's default address",
-    )
-
-
-def get_balance_myNft(
-    wallet: Wallet,
-    contract_address: str,
-    address: str | None = None,
-) -> str:
-    """Get Xonin NFT balance for a specific contract."""
-
-    try:
-        check_address = address if address is not None else wallet.default_address.address_id
-
-        # First get the total number of tokens owned
-        balance = SmartContract.read(
-            wallet.network_id, 
-            contract_address, 
-            abi=abi, 
-            method="balanceOf", 
-            args={"owner": check_address}
-        )
-
-        if balance == 0:
-            return f"Address {check_address} owns no NFTs in contract {contract_address}"
-        else: print(f"Balance: {balance}")
-        
-        # Then get each token ID using tokenOfOwnerByIndex
-        owned_tokens = []
-        for i in range(balance):
-            token_id = SmartContract.read(
-                wallet.network_id,
-                contract_address,
-                abi=abi,
-                method="tokenOfOwnerByIndex",
-                args={
-                    "owner": check_address,
-                    "index": str(i)
-                }
-            )
-            owned_tokens.append(token_id)
-
-        token_list = ", ".join(str(token_id) for token_id in owned_tokens)
-        return f"Address {check_address} owns {len(owned_tokens)} NFTs in contract {contract_address}.\nToken IDs: {token_list}"
-
-    except Exception as e:
-        return f"Error getting Xonin NFT balance for address {check_address} in contract {contract_address}: {e!s}"
-
-
-
-####
-def is_valid_mint_request(tweet_text):
-    """Check if tweet contains valid mint request and extract address."""
-    pattern = r"(?i)mint.*?to\s+(0x[a-fA-F0-9]+)"
-    match = re.search(pattern, tweet_text)
-    if match and is_address(match.group(1)):
-        return match.group(1)
-    return None
-
-def process_mint_request(agent_executor, config, tweet_id, eth_address):
-    """Process an NFT mint request."""
-    try:
-        # Get Twitter API wrapper from tools
-        twitter_tool = next(
-            tool for tool in agent_executor.tools 
-            if isinstance(tool, TwitterToolkit)
-        )
-        twitter_api = twitter_tool.twitter_api_wrapper.api
-
-        # Mint NFT and get response
-        mint_response = mint_myNft(agent_executor.wallet, eth_address)
-        
-        # Extract SVG filename from response
-        svg_file = re.search(r'nft_\d+\.svg', mint_response)
-        if not svg_file:
-            raise ValueError("Could not find SVG file in mint response")
-        
-        svg_file = svg_file.group(0)
-        
-        # Upload SVG media to Twitter
-        media = twitter_api.media_upload(svg_file)
-        media_id = media.media_id_string
-        
-        # Construct tweet with media
-        tweet_text = mint_response
-        twitter_api.update_status(
-            status=tweet_text,
-            in_reply_to_status_id=tweet_id,
-            media_ids=[media_id]
-        )
-        
-        # Clean up files
-        try:
-            os.remove(svg_file)
-        except Exception as e:
-            print(f"Warning: Could not clean up files: {e}")
-
-    except Exception as e:
-        error_msg = f"Error processing mint request: {str(e)}"
-        print(error_msg)
-        # Try to reply with error message
-        try:
-            twitter_api.update_status(
-                status=f"Sorry, there was an error processing your mint request: {str(e)}",
-                in_reply_to_status_id=tweet_id
-            )
-        except:
-            print("Could not send error message tweet")
-
-def initialize_agent():
-    """Initialize the agent with CDP Agentkit."""
-    # Initialize LLM.
-    llm = ChatOpenAI(model="gpt-4o-mini")
-
-    wallet_data = None
-
-    if os.path.exists(wallet_data_file):
-        with open(wallet_data_file) as f:
-            wallet_data = f.read()
-
-    # Configure CDP Agentkit Langchain Extension.
-    values = {}
-    if wallet_data is not None:
-        values = {"cdp_wallet_data": wallet_data}
-
-    agentkit = CdpAgentkitWrapper(**values)
-
-    # persist the agent's CDP MPC Wallet Data.
-    wallet_data = agentkit.export_wallet()
-    with open(wallet_data_file, "w") as f:
-        f.write(wallet_data)
-
-    # Initialize Twitter wrapper using the existing TwitterApiWrapper
-    values = {}
-    twitter_wrapper = TwitterApiWrapper(**values)    
-    twitter_toolkit = TwitterToolkit.from_twitter_api_wrapper(twitter_wrapper)
-    twitter_tools = twitter_toolkit.get_tools()
-
-    # Initialize CDP 
-    cdp_toolkit = CdpToolkit.from_cdp_agentkit_wrapper(agentkit)
-    mintNftTool = CdpTool(
-        name="mint_myNft",
-        description=MINT_MYNFT_PROMPT,
-        cdp_agentkit_wrapper=agentkit,
-        args_schema=MintMyNftInput,
-        func=mint_myNft,
-    )
-
-    # Add after GET_BALANCE_MYNFT_PROMPT
-    TRANSFER_MYNFT_PROMPT = """
-    This tool will transfer a Xonin NFT (ERC-721) to another address.
-    It takes the following inputs:
-    - to_address: The address to transfer the NFT to
-    - token_id: The ID of the NFT to transfer
-    """
-
-    class TransferMyNftInput(BaseModel):
-        """Input argument schema for transfer Xonin NFT action."""
-        to_address: str = Field(..., description="The address to transfer the NFT to")
-        token_id: int = Field(..., description="The ID of the NFT to transfer")
-
-    def transfer_myNft(
-        wallet: Wallet,
-        to_address: str,
-        token_id: int,
-    ) -> str:
-        """Transfer a Xonin NFT to another address.
-
-        Args:
-            wallet (Wallet): The wallet to sign the transfer from
-            to_address (str): The address to transfer the NFT to
-            token_id (int): The ID of the NFT to transfer
-
-        Returns:
-            str: A message containing the transfer details
-        """
-        try:
-            # Call transferFrom function
-            transfer_invocation = wallet.invoke_contract(
-                contract_address="0x15077415012b6f5a6F2842928886B51e0E2CB2D6",
-                abi=abi,
-                method="transferFrom",
-                args={
-                    "from": wallet.default_address.address_id,
-                    "to": to_address,
-                    "tokenId": str(token_id)
-                }
-            ).wait()
-
-            return (f"Transferred Xonin NFT #{token_id} to {to_address} on network {wallet.network_id}.\n"
-                    f"Transaction hash: {transfer_invocation.transaction.transaction_hash}\n"
-                    f"Transaction link: {transfer_invocation.transaction.transaction_link}")
-
-        except Exception as e:
-            return f"Error transferring Xonin NFT: {e!s}"
-
-    # Add in initialize_agent() after getBalanceMyNftTool
-    transferNftTool = CdpTool(
-        name="transfer_myNft",
-        description=TRANSFER_MYNFT_PROMPT,
-        cdp_agentkit_wrapper=agentkit,
-        args_schema=TransferMyNftInput,
-        func=transfer_myNft,
-    )
-
-    # Combine tools from both toolkits
-    tools = twitter_tools + [mintNftTool, transferNftTool]  + cdp_toolkit.get_tools()
-
-    # Store buffered conversation history in memory.
-    memory = MemorySaver()
-    config = {"configurable": {"thread_id": "CDP Agentkit Chatbot Example!"}}
-
-    # Create ReAct Agent using the LLM and CDP Agentkit tools.
-    agent_executor, config = create_react_agent(
-        llm,
-        tools=tools,
-        checkpointer=memory,
-        state_modifier=(
-            "You are a helpful agent that can interact both onchain using the Coinbase Developer Platform AgentKit "
-            "and with Twitter using Twitter API. You can perform blockchain operations and social media actions. "
-            "For blockchain: If you ever need funds, you can request them from the faucet if you are on network ID "
-            "'base-sepolia'. If not, you can provide your wallet details and request funds from the user. "
-            "For Twitter: You can post tweets, read tweets, and interact with Twitter users. "
-            "Before executing your first blockchain action, get the wallet details to see what network you're on. "
-            "If there is a 5XX (internal) HTTP error code, ask the user to try again later. "
-            "If someone asks you to do something you can't do with your currently available tools, "
-            "you must say so, and encourage them to implement it themselves using the CDP SDK + Agentkit, "
-            "recommend they go to docs.cdp.coinbase.com for more information. Be concise and helpful with your "
-            "responses. Refrain from restating your tools' descriptions unless it is explicitly requested."
-        ),
-    ), config
-
-    return agent_executor, config, tools, twitter_wrapper  # Return twitter_wrapper as well
-
-def get_account_details(tools):
-    """Get Twitter account details to obtain account_id."""
-    account_details_tool = next(
-        tool for tool in tools 
-        if tool.name == "account_details"
-    )
-    
-    response = account_details_tool._run()
-    print("Account details:", response)
-    
-    try:
-        json_start = response.find('{')
-        json_end = response.rfind('}') + 1
-        json_str = response[json_start:json_end]
-        
-        data = json.loads(json_str)
-        if "data" in data:
-            return data["data"].get("id")
-    except json.JSONDecodeError as e:
-        print(f"Error parsing account details JSON: {e}")
-    return None
-
-def get_dummy_mentions():
-    """Get mentions from dummy file for debugging."""
-    if not os.path.exists(DUMMY_MENTIONS_FILE):
-        print(f"Warning: {DUMMY_MENTIONS_FILE} not found")
-        return []
-        
-    try:
-        with open(DUMMY_MENTIONS_FILE, 'r') as f:
-            data = json.load(f)
-            if "data" in data:
-                # Create author lookup from includes
-                authors = {}
-                if "includes" in data and "users" in data["includes"]:
-                    for user in data["includes"]["users"]:
-                        authors[user["id"]] = user["username"]
-                
-                # Add author username to each tweet
-                tweets = data["data"]
-                for tweet in tweets:
-                    if "author_id" in tweet and tweet["author_id"] in authors:
-                        tweet["author_username"] = authors[tweet["author_id"]]
-                
-                return tweets
-    except json.JSONDecodeError as e:
-        print(f"Error parsing dummy mentions file: {e}")
-    except Exception as e:
-        print(f"Error reading dummy mentions file: {e}")
-    
-    return []
-
-def get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id=None):
-    """Get the latest mentions."""
-    if DEBUG_MODE:
-        print("DEBUG MODE: Reading from dummy mentions file")
-        return get_dummy_mentions()
-    
-    # Add since_id and max_results to the API call if we have them
-    params = {"account_id": account_id}
-    if since_id:
-        params["since_id"] = since_id
-    if max_results:
-        params["max_results"] = max_results
-    
-    response = account_mentions_tool._run(**params)
-    print("Mentions response:", response)
-    
-    try:
-        json_start = response.find('{')
-        json_end = response.rfind('}') + 1
-        json_str = response[json_start:json_end]
-        
-        data = json.loads(json_str)
-        if "data" in data:
-            # Create author lookup from includes
-            authors = {}
-            if "includes" in data and "users" in data["includes"]:
-                for user in data["includes"]["users"]:
-                    authors[user["id"]] = user["username"]
-            
-            # Add author username to each tweet
-            tweets = data["data"]
-            for tweet in tweets:
-                if "author_id" in tweet and tweet["author_id"] in authors:
-                    tweet["author_username"] = authors[tweet["author_id"]]
-            
-            return tweets
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON response: {e}")
-    
-    return []
-
-def is_valid_mint_request_with_feedback(tweet_text):
-    """Check if tweet contains mint request and provide feedback."""
-    # Case insensitive search for 'mint' and 'to' followed by an address
-    pattern = r"(?i)mint.*?to\s+(0x[a-fA-F0-9]+)"
-    match = re.search(pattern, tweet_text)
-    if not match:
-        return None, None
-    
-    address = match.group(1)
-    if not is_address(address):
-        return address, "invalid_address"  # Return the invalid address for the error message
-    
-    return address, "valid"
-
-def check_eth_balance(agent_executor, config, address):
-    """Check if address has non-zero ETH balance."""
-    balance_prompt = f"Get the ETH balance of address {address}"
-    
-    for chunk in agent_executor.stream(
-        {"messages": [HumanMessage(content=balance_prompt)]}, config
-    ):
-        if "agent" in chunk:
-            response = chunk["agent"]["messages"][0].content
-            # Look for balance in the response
-            if "balance: 0" in response.lower() or "balance is 0" in response.lower():
-                return False
-            if "balance:" in response.lower() and "eth" in response.lower():
-                return True
-    return False
-
-def send_error_reply(agent_executor, config, tweet_id, error_type, address=None, author=None, previous_tweet_id=None):
-    """Send error reply tweet and return reply ID if successful."""
-    greeting = f"Hey @{author}! " if author else ""
-    
-    if error_type == "invalid_address":
-        reply_prompt = (
-            f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"'{greeting}Sorry, the address {address} is not a valid Ethereum address. "
-            "Please make sure to provide a valid address starting with 0x. You can always mint your NFT at https://xonin.vercel.app/.' Be creative in conveying this message!"
-        )
-    elif error_type == "zero_balance":
-        reply_prompt = (
-            f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"'{greeting}Sorry, the address {address} has 0 ETH balance. Please provide an active address. You can always mint your NFT at https://xonin.vercel.app/.'"
-            f"Or more humorously like: '{greeting}Why so poor? Get some ETH first.' Be creative in conveying this message!"
-        )
-    elif error_type == "already_minted":
-        reply_prompt = (
-            f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"'{greeting}You have already minted an NFT (see tweet {previous_tweet_id}). "
-            "This is limited to one NFT per user, don't be greedy! You can mint another one yourself at https://xonin.vercel.app/.' Be creative in conveying this message!"
-        )
-    
-    reply_id = None
-    for chunk in agent_executor.stream(
-        {"messages": [HumanMessage(content=reply_prompt)]}, config
-    ):
-        if "agent" in chunk:
-            print(chunk["agent"]["messages"][0].content)
-        elif "tools" in chunk:
-            response = chunk["tools"]["messages"][0].content
-            try:
-                json_start = response.find('{')
-                json_end = response.rfind('}') + 1
-                json_str = response[json_start:json_end]
-                data = json.loads(json_str)
-                if "data" in data and "id" in data["data"]:
-                    reply_id = data["data"]["id"]
-            except:
-                pass
-    return reply_id
-
+# Helper classes
+# ---------
 class MentionMemory:
     def __init__(self):
         self.processed_mentions = {}
@@ -654,7 +135,334 @@ class MentionMemory:
                 return tweet_id
         return None
 
-def process_tweet(agent_executor, config, tweet, mention_memory, twitter_wrapper):
+# Helper onchain functions
+# ---------
+def check_eth_balance(wallet: Wallet, address: str):
+    """Check if address has non-zero ETH balance using CDP SDK."""
+    try:
+        # Create Address object for the given address
+        addr = Address(
+            network_id=wallet.network_id,
+            address_id=address
+        )
+        
+        # Get ETH balance directly using balance() method
+        balance_eth = addr.balance("eth")
+        
+        print(f"ETH Balance for {address}: {balance_eth} ETH")
+        return balance_eth > 0
+
+    except Exception as e:
+            print(f"Error checking ETH balance: {e}")
+            return False
+
+def get_transaction_data(tx_hash):
+    url = f"https://api-sepolia.basescan.org/api?module=proxy&action=eth_getTransactionReceipt&txhash={tx_hash}&apikey={etherscan_api_key}"
+
+    print(f"Getting transaction data for {tx_hash} from etherscan")
+
+    response = requests.get(url)
+    data = response.json()
+
+    last_log = data['result']['logs'][-1]
+    int_value = int(last_log['topics'][3], 16)
+    contract_address = last_log['address']
+
+    return int_value, contract_address
+
+# Helper functions
+# ---------
+
+# import cairosvg
+
+# def save_svg_to_png(file_number, svg_content):
+#     """
+#     Saves the given SVG content as a PNG file.
+
+#     Parameters:
+#         file_number (int): The identifier number for the file name.
+#         svg_content (str): The SVG content as a string.
+#     """
+#     file_name = f"output_{file_number}.png"
+#     cairosvg.svg2png(bytestring=svg_content.encode('utf-8'), write_to=file_name)
+#     print(f"SVG saved as PNG: {file_name}")
+
+# Mint nft functions
+# ---------
+MINT_MYNFT_PROMPT = """
+This tool will mint a Xonin NFT and transfer it directly to the specified address by paying 0.001 ETH.
+The NFT will be minted and transferred in a single transaction.
+"""
+
+class MintMyNftInput(BaseModel):
+    """Input argument schema for mint XoninNFT action."""
+    recipient_address: str = Field(
+        ...,
+        description="The address that will receive the minted NFT"
+    )
+
+def get_token_uri_and_svg(wallet: Wallet, contract_address: str, token_id: int) -> tuple[str, str, str]:
+    """Get tokenURI and extract name and SVG from the response."""
+    print("Getting tokenURI and SVG from contract")
+    try:
+        # Call tokenURI function
+        token_uri = SmartContract.read(
+            wallet.network_id,
+            contract_address,
+            abi=[{
+                "inputs": [{"internalType": "uint256", "name": "tokenId", "type": "uint256"}],
+                "name": "tokenURI",
+                "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+                "stateMutability": "view",
+                "type": "function"
+            }],
+            method="tokenURI",
+            args={"tokenId": str(token_id)}
+        )
+
+        # Extract the JSON part after data:application/json;utf8,
+        json_str = token_uri.split('data:application/json;utf8,')[1]
+        json_data = json.loads(unquote(json_str))
+        
+        # Extract name and SVG
+        name = json_data['name']
+        svg_data = json_data['image'].split('data:image/svg+xml;utf8,')[1]
+        
+        return token_uri, name, svg_data
+
+    except Exception as e:
+        return None, None, f"Error getting token URI and SVG: {e!s}"
+
+def mint_myNft(wallet: Wallet, recipient_address: str) -> str:
+    """Mint a Xonin NFT and transfer it to the specified address."""  
+    try:
+        mint_invocation = wallet.invoke_contract(
+            contract_address=NFT_CONTRACT_ADDRESS,
+            abi=abi,
+            method="mintAndTransfer",
+            args={"recipient": recipient_address},
+            amount=NFT_PRICE,
+            asset_id="eth",
+        ).wait()
+        
+        return (f"🎉 Successfully minted NFT for {recipient_address}!\n\n"
+                f"🔗 Transaction: {mint_invocation.transaction.transaction_link}\n"
+                f"Transaction hash: {mint_invocation.transaction.transaction_hash}\n"
+                )
+
+    except Exception as e:
+        return f"Error minting and transferring NFT: {e!s}"
+
+
+# Twitter functions
+# ---------
+
+def get_dummy_mentions():
+    """Get mentions from dummy file for debugging."""
+    if not os.path.exists(DUMMY_MENTIONS_FILE):
+        print(f"Warning: {DUMMY_MENTIONS_FILE} not found")
+        return []
+        
+    try:
+        with open(DUMMY_MENTIONS_FILE, 'r') as f:
+            data = json.load(f)
+            if "data" in data:
+                # Create author lookup from includes
+                authors = {}
+                if "includes" in data and "users" in data["includes"]:
+                    for user in data["includes"]["users"]:
+                        authors[user["id"]] = user["username"]
+                
+                # Add author username to each tweet
+                tweets = data["data"]
+                for tweet in tweets:
+                    if "author_id" in tweet and tweet["author_id"] in authors:
+                        tweet["author_username"] = authors[tweet["author_id"]]
+                
+                return tweets
+    except json.JSONDecodeError as e:
+        print(f"Error parsing dummy mentions file: {e}")
+    except Exception as e:
+        print(f"Error reading dummy mentions file: {e}")
+    
+    return []
+
+def get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id=None):
+    """Get the latest mentions."""
+    if DEBUG_MODE:
+        print("DEBUG MODE: Reading from dummy mentions file")
+        return get_dummy_mentions()
+    
+    # Add since_id and max_results to the API call if we have them
+    params = {"account_id": account_id}
+    if since_id:
+        params["since_id"] = since_id
+    if max_results:
+        params["max_results"] = max_results
+    
+    response = account_mentions_tool._run(**params)
+    print("Mentions response:", response)
+    
+    try:
+        json_start = response.find('{')
+        json_end = response.rfind('}') + 1
+        json_str = response[json_start:json_end]
+        
+        data = json.loads(json_str)
+        if "data" in data:
+            # Create author lookup from includes
+            authors = {}
+            if "includes" in data and "users" in data["includes"]:
+                for user in data["includes"]["users"]:
+                    authors[user["id"]] = user["username"]
+            
+            # Add author username to each tweet
+            tweets = data["data"]
+            for tweet in tweets:
+                if "author_id" in tweet and tweet["author_id"] in authors:
+                    tweet["author_username"] = authors[tweet["author_id"]]
+            
+            return tweets
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON response: {e}")
+    
+    return []
+
+
+def is_valid_mint_request_with_feedback(tweet_text):
+    """Check if tweet contains mint request and provide feedback."""
+    # Case insensitive search for 'mint' and 'to' followed by an address
+    pattern = r"(?i)mint.*?to\s+(0x[a-fA-F0-9]+)"
+    match = re.search(pattern, tweet_text)
+    if not match:
+        return None, None
+    
+    address = match.group(1)
+    if not is_address(address):
+        return address, "invalid_address"  # Return the invalid address for the error message
+    
+    return address, "valid"
+
+def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_address, twitter_wrapper, author=None):
+    """Process an NFT mint request."""
+    try:
+        print(f"Starting mint process for {eth_address}...")
+        
+        # Mint NFT and get response
+        mint_response = mint_myNft(wallet, eth_address)
+        print(f"Mint response: {mint_response}")
+        
+        # Check if there was an error in minting
+        if "Error" in mint_response:
+            raise Exception(mint_response)
+
+        # Get txHash from mint response
+        txHash = re.search(r'Transaction hash: (\w+)', mint_response)
+        if not txHash:
+            raise ValueError("Could not find transaction hash in mint response")
+        txHash = txHash.group(1)
+        print(f"Transaction hash: {txHash}")
+
+        # Get transaction link - update pattern to capture full URL
+        txLink = re.search(r'Transaction: (https://[^\s\n]+)', mint_response)
+        if not txLink:
+            raise ValueError("Could not find transaction link in mint response")
+        txLink = txLink.group(1)
+        print(f"Transaction link: {txLink}")
+
+        # Get transaction info
+        token_id, nft_mint_address = get_transaction_data(txHash)
+        print(f"Token ID: {token_id}, NFT Mint Address: {nft_mint_address}")
+
+        # Get token URI, name and SVG after minting
+        token_uri, name, svg_data = get_token_uri_and_svg(wallet, nft_mint_address, token_id)
+        print(f"Minted NFT: {name}")
+
+        if not svg_data:
+            raise ValueError("Could not get SVG data for NFT")
+                
+        # Get Twitter API wrapper from tools list
+        twitter_client = twitter_wrapper.v1_api
+
+        # Upload media to Twitter
+        png_file = "xonin.png"
+        if not os.path.exists(png_file):
+            raise ValueError(f"PNG file {png_file} not found")
+            
+        media = twitter_client.media_upload(png_file)
+        if not media:
+            raise ValueError("Failed to upload media to Twitter")
+            
+        media_id = media.media_id_string
+        print(f"Uploaded media to Twitter, ID: {media_id}")
+
+        # Post reply with media
+        greeting = f"@{author}! " if author else ""
+        reply_prompt = (
+            f"Use post_tweet_reply and attach the media ID: {media_id} to reply to tweet {tweet_id} with a personalized message about the successful mint such as:\n"
+            f"{greeting} successfully minted {name}! Have fun with your fully onchain art on @base! Visit https://xonin.vercel.app/ to learn more about the project! Here's the transaction link: {txLink}.'"
+            f"Be creative in conveying this message!"
+        )
+
+        print("Sending reply tweet...")
+        for chunk in agent_executor.stream(
+            {"messages": [HumanMessage(content=reply_prompt)]}, config
+        ):
+            if "tools" in chunk:
+                response = chunk["tools"]["messages"][0].content
+                print(f"Reply response: {response}")
+
+        return True, txHash
+
+    except Exception as e:
+        error_msg = f"Error processing mint request: {e}"
+        print(error_msg)
+        return False, None
+
+
+def send_error_reply(agent_executor, config, tweet_id, error_type, address=None, author=None, previous_tweet_id=None):
+    """Send error reply tweet and return reply ID if successful."""
+    greeting = f"Hey @{author}! " if author else ""
+    
+    if error_type == "invalid_address":
+        reply_prompt = (
+            f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
+            f"'{greeting}Sorry, the address {address} is not a valid Ethereum address. "
+            "Please make sure to provide a valid address starting with 0x. You can always mint your NFT at https://xonin.vercel.app/.' Be creative in conveying this message!"
+        )
+    elif error_type == "zero_balance":
+        reply_prompt = (
+            f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
+            f"'{greeting}Sorry, the address {address} has 0 ETH balance. Please provide an active address. You can always mint your NFT at https://xonin.vercel.app/.'"
+            f"Or more humorously like: '{greeting}Why so poor? Get some ETH first.' Be creative in conveying this message!"
+        )
+    elif error_type == "already_minted":
+        reply_prompt = (
+            f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
+            f"'{greeting}You have already minted an NFT. "
+            "This is limited to one NFT per user, don't be greedy! You can mint another one yourself at https://xonin.vercel.app/.' Be creative in conveying this message!"
+        )
+    
+    reply_id = None
+    for chunk in agent_executor.stream(
+        {"messages": [HumanMessage(content=reply_prompt)]}, config
+    ):
+        if "agent" in chunk:
+            print(chunk["agent"]["messages"][0].content)
+        elif "tools" in chunk:
+            response = chunk["tools"]["messages"][0].content
+            try:
+                json_start = response.find('{')
+                json_end = response.rfind('}') + 1
+                json_str = response[json_start:json_end]
+                data = json.loads(json_str)
+                if "data" in data and "id" in data["data"]:
+                    reply_id = data["data"]["id"]
+            except:
+                pass
+    return reply_id
+
+def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory, twitter_wrapper):
     """Process a single tweet."""
     tweet_id = tweet.get("id")
     tweet_text = tweet.get("text")
@@ -662,37 +470,15 @@ def process_tweet(agent_executor, config, tweet, mention_memory, twitter_wrapper
     if not tweet_text or not tweet_id:
         return False
     
-    # Check if we've already processed this tweet
+    # Check if already processed 
     if mention_memory.is_processed(tweet_id):
         return False
         
-    # Get author info from the tweet data
+    # Get author info from tweet data
     author = tweet.get("author_username")
     author_id = tweet.get("author_id")
     print(f"Processing tweet from @{author}")
-    
-    # Check if user has already minted successfully
-    previous_tweet_id = mention_memory.has_successful_mint(author_id)
-    if previous_tweet_id:
-        print(f"User @{author} has already minted an NFT")
-        reply_id = send_error_reply(
-            agent_executor, 
-            config, 
-            tweet_id, 
-            "already_minted", 
-            author=author,
-            previous_tweet_id=previous_tweet_id
-        )
-        mention_memory.add_mention(
-            tweet_id,
-            tweet_text,
-            "duplicate_request",
-            author=author,
-            author_id=author_id,
-            reply_id=reply_id
-        )
-        return True
-        
+     
     # Check if it's a mint request and validate address
     address, status = is_valid_mint_request_with_feedback(tweet_text)
     
@@ -714,7 +500,7 @@ def process_tweet(agent_executor, config, tweet, mention_memory, twitter_wrapper
         return True
         
     # Check ETH balance
-    if not check_eth_balance(agent_executor, config, address):
+    if not check_eth_balance(wallet, address):
         print(f"Zero balance address found: {address}")
         reply_id = send_error_reply(agent_executor, config, tweet_id, "zero_balance", address, author)
         mention_memory.add_mention(
@@ -727,54 +513,132 @@ def process_tweet(agent_executor, config, tweet, mention_memory, twitter_wrapper
         )
         return True
         
-    # If we get here, address is valid and has balance
-    print(f"Processing mint request for address: {address}")
-    try:
-        tx_hash = None
-        reply_id = None
-        
-        # Process mint request and capture response
-        for chunk in agent_executor.stream(
-            {"messages": [HumanMessage(content=mint_prompt)]}, config
-        ):
-            if "tools" in chunk:
-                response = chunk["tools"]["messages"][0].content
-                # Try to extract transaction hash and reply ID
-                try:
-                    if "transaction hash" in response.lower():
-                        tx_hash = re.search(r'0x[a-fA-F0-9]{64}', response).group(0)
-                    if "post_tweet_reply" in response:
-                        json_start = response.find('{')
-                        json_end = response.rfind('}') + 1
-                        json_str = response[json_start:json_end]
-                        data = json.loads(json_str)
-                        if "data" in data and "id" in data["data"]:
-                            reply_id = data["data"]["id"]
-                except:
-                    pass
-        
-        mention_memory.add_mention(
+    # Check if user has already minted successfully
+    previous_tweet_id = mention_memory.has_successful_mint(author_id)
+    if previous_tweet_id:
+        print(f"User @{author} has already minted an NFT")
+        reply_id = send_error_reply(
+            agent_executor, 
+            config, 
             tweet_id, 
-            tweet_text, 
-            "processed", 
-            mint_success=True,
-            tx_hash=tx_hash,
-            reply_id=reply_id,
+            "already_minted", 
             author=author,
-            author_id=author_id
+            previous_tweet_id=previous_tweet_id
         )
-    except Exception as e:
-        print(f"Error minting NFT: {e}")
         mention_memory.add_mention(
-            tweet_id, 
-            tweet_text, 
-            "mint_failed", 
+            tweet_id,
+            tweet_text,
+            "duplicate_request",
             author=author,
-            author_id=author_id
+            author_id=author_id,
+            reply_id=reply_id
         )
-    return True
+        return True
+       
 
-def run_autonomous_mode(agent_executor, config, tools, twitter_wrapper, interval=3000):
+    # Address is valid and has balance -> mint nft
+    print(f"Processing mint request for address: {address}")
+    
+    try:
+        mint_success, tx_hash = process_mint_request(agent_executor, wallet, config, tweet_id, address, twitter_wrapper, author)
+        mention_memory.add_mention(
+            tweet_id,
+            tweet_text,
+            "processed",
+            mint_success=mint_success,
+            tx_hash=tx_hash,
+            author=author,
+            author_id=author_id
+        )
+        return True
+    except Exception as e:
+        print(f"Error in process_tweet: {e}")
+        mention_memory.add_mention(
+            tweet_id,
+            tweet_text,
+            "error",
+            mint_success=False,
+            author=author,
+            author_id=author_id
+        )
+        return False
+
+# Init agent
+# ---------
+def initialize_agent():
+    """Initialize the agent with CDP Agentkit."""
+    # Initialize LLM.
+    llm = ChatOpenAI(model="gpt-4o-mini")
+
+    wallet_data = None
+
+    if os.path.exists(wallet_data_file):
+        with open(wallet_data_file) as f:
+            wallet_data = f.read()
+
+    # Configure CDP Agentkit Langchain Extension.
+    values = {}
+    if wallet_data is not None:
+        values = {"cdp_wallet_data": wallet_data}
+
+    agentkit = CdpAgentkitWrapper(**values)
+
+    # persist the agent's CDP MPC Wallet Data.
+    wallet_data = agentkit.export_wallet()
+    with open(wallet_data_file, "w") as f:
+        f.write(wallet_data)
+
+    wallet = agentkit.wallet
+    print(f"Wallet: {wallet}")
+
+    # Initialize Twitter wrapper using the existing TwitterApiWrapper
+    values = {}
+    twitter_wrapper = TwitterApiWrapper(**values)    
+    twitter_toolkit = TwitterToolkit.from_twitter_api_wrapper(twitter_wrapper)
+    twitter_tools = twitter_toolkit.get_tools()
+
+    # Initialize CDP 
+    cdp_toolkit = CdpToolkit.from_cdp_agentkit_wrapper(agentkit)
+    mintNftTool = CdpTool(
+        name="mint_myNft",
+        description=MINT_MYNFT_PROMPT,
+        cdp_agentkit_wrapper=agentkit,
+        args_schema=MintMyNftInput,
+        func=mint_myNft,
+    )
+
+    # Combine tools from both toolkits
+    tools = twitter_tools + [mintNftTool] # + cdp_toolkit.get_tools()
+
+    # Store buffered conversation history in memory.
+    memory = MemorySaver()
+    config = {"configurable": {"thread_id": "CDP Agentkit Chatbot Example!"}}
+
+    # Create ReAct Agent using the LLM and CDP Agentkit tools.
+    agent_executor, config = create_react_agent(
+        llm,
+        tools=tools,
+        checkpointer=memory,
+        state_modifier=(
+            "You are a helpful agent that can interact both onchain using the Coinbase Developer Platform AgentKit "
+            "and with Twitter using Twitter API. You can perform blockchain operations and social media actions. "
+            "For blockchain: If you ever need funds, you can request them from the faucet if you are on network ID "
+            "'base-sepolia'. If not, you can provide your wallet details and request funds from the user. "
+            "For Twitter: You can post tweets, read tweets, and interact with Twitter users. "
+            "Before executing your first blockchain action, get the wallet details to see what network you're on. "
+            "If there is a 5XX (internal) HTTP error code, ask the user to try again later. "
+            "If someone asks you to do something you can't do with your currently available tools, "
+            "you must say so, and encourage them to implement it themselves using the CDP SDK + Agentkit, "
+            "recommend they go to docs.cdp.coinbase.com for more information. Be concise and helpful with your "
+            "responses. Refrain from restating your tools' descriptions unless it is explicitly requested."
+        ),
+    ), config
+
+    return agent_executor, wallet, config, tools, twitter_wrapper  
+
+# Running modes
+# ---------
+def run_autonomous_mode(agent_executor, wallet: Wallet, config, tools, twitter_wrapper, interval=3000):
     """Run the agent autonomously with specified intervals."""
     print("Starting autonomous mode with NFT minting capability...")
     print(f"Debug mode: {DEBUG_MODE}")
@@ -796,7 +660,7 @@ def run_autonomous_mode(agent_executor, config, tools, twitter_wrapper, interval
             
             # Process all tweets
             for tweet in all_tweets:
-                if process_tweet(agent_executor, config, tweet, mention_memory, twitter_wrapper):
+                if process_tweet(agent_executor, wallet, config, tweet, mention_memory, twitter_wrapper):
                     mentions_found = True
 
             # Update last_tweet_id after processing
@@ -824,8 +688,6 @@ def run_autonomous_mode(agent_executor, config, tools, twitter_wrapper, interval
             print("Waiting before retry...")
             time.sleep(interval)
 
-
-# Chat Mode
 def run_chat_mode(agent_executor, config):
     """Run the agent interactively based on user input."""
     print("Starting chat mode... Type 'exit' to end.")
@@ -849,30 +711,13 @@ def run_chat_mode(agent_executor, config):
             print("Goodbye Agent!")
             sys.exit(0)
 
-
-# Mode Selection
-def choose_mode():
-    """Choose whether to run in autonomous or chat mode based on user input."""
-    while True:
-        print("\nAvailable modes:")
-        print("1. chat    - Interactive chat mode")
-        print("2. auto    - Autonomous action mode")
-
-        choice = input("\nChoose a mode (enter number or name): ").lower().strip()
-        if choice in ["1", "chat"]:
-            return "chat"
-        elif choice in ["2", "auto"]:
-            return "auto"
-        print("Invalid choice. Please try again.")
-
-
 def main():
     """Start the chatbot agent."""
-    agent_executor, config, tools, twitter_wrapper = initialize_agent()  # Get twitter_wrapper from initialize_agent
+    agent_executor, wallet, config, tools, twitter_wrapper = initialize_agent()  # Get twitter_wrapper from initialize_agent
 
-    run_chat_mode(agent_executor=agent_executor, config=config)
-    #run_autonomous_mode(agent_executor=agent_executor, config=config, tools=tools, twitter_wrapper=twitter_wrapper)
-
+    #run_chat_mode(agent_executor=agent_executor, config=config)
+    run_autonomous_mode(agent_executor=agent_executor, wallet=wallet, config=config, tools=tools, twitter_wrapper=twitter_wrapper)
+    #save_svg_to_png(14, "<svg width='500' height='500' viewBox='0 0 500 500' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'><symbol id='c' viewBox='0 0 100 100'><circle cx='50' cy='50' r='25'></circle></symbol><symbol id='t' viewBox='0 0 100 100'><polygon points='0,100 100,100 50,0'></polygon></symbol><symbol id='b' viewBox='0 0 100 100'><rect width='500' height='50'></rect></symbol><filter id='f1' width='200%' height='200%'><feOffset in='SourceGraphic' result='r' dx='50' dy='20' /><feGaussianBlur in='r' result='rb' stdDeviation='0'/><feMerge><feMergeNode in='rb' /><feMergeNode in='SourceGraphic' /></feMerge></filter><symbol id='s'><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#aee239' fill-opacity='0.75' transform='translate(146 480)  scale(3.93)  rotate(56)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#8fbe00' fill-opacity='0.89' transform='translate(107 490)  scale(3.36)  rotate(291)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#aee239' fill-opacity='0.82' transform='translate(136 396)  scale(1.75)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#8fbe00' fill-opacity='0.79' transform='translate(393 342)  scale(3.82)  rotate(213)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.94' transform='translate(337 68)  scale(0.22)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.91' transform='translate(41 264)  scale(1.20)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#8fbe00' fill-opacity='0.79' transform='translate(128 281)  scale(2.72)  rotate(306)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#8fbe00' fill-opacity='0.87' transform='translate(71 410)  scale(2.23)  rotate(232)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#8fbe00' fill-opacity='0.76' transform='translate(385 446)  scale(1.59)  rotate(246)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.85' transform='translate(490 499)  scale(4.77)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#40c0cb' fill-opacity='0.66' transform='translate(350 202)  scale(2.63)  rotate(303)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#8fbe00' fill-opacity='0.93' transform='translate(341 78)  scale(2.32)  rotate(288)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#aee239' fill-opacity='0.69' transform='translate(196 46)  scale(0.1)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.87' transform='translate(154 314)  scale(1.68)  rotate(199)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.60' transform='translate(180 112)  scale(1.26)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#aee239' fill-opacity='0.84' transform='translate(337 232)  scale(0.49)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.79' transform='translate(454 75)  scale(1.56)  rotate(141)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#8fbe00' fill-opacity='0.78' transform='translate(47 158)  scale(4.5)  rotate(58)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.97' transform='translate(145 447)  scale(2.77)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#aee239' fill-opacity='0.75' transform='translate(132 1)  scale(4.8)  rotate(92)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.93' transform='translate(433 483)  scale(0.60)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#aee239' fill-opacity='0.69' transform='translate(362 205)  scale(3.90)  rotate(12)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.83' transform='translate(459 285)  scale(0.12)  rotate(22)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.72' transform='translate(25 80)  scale(2.21)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#aee239' fill-opacity='0.73' transform='translate(424 129)  scale(3.62)  rotate(100)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.67' transform='translate(217 396)  scale(1.21)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#8fbe00' fill-opacity='0.98' transform='translate(133 478)  scale(3.29)  rotate(114)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#aee239' fill-opacity='0.70' transform='translate(426 402)  scale(2.16)  rotate(137)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.68' transform='translate(434 291)  scale(2.60)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#40c0cb' fill-opacity='0.72' transform='translate(290 278)  scale(2.71)  rotate(248)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#40c0cb' fill-opacity='0.68' transform='translate(467 482)  scale(1.92)' > </use></g></symbol><g fill='#00a8c6'><rect width='500' height='500' /><use href='#s' filter='url(#f1)'/></g></svg>")
 
 if __name__ == "__main__":
     print("Starting NFT Minting Agent...")

@@ -13,6 +13,7 @@ class TwitterApiWrapper(BaseModel):
     """Wrapper for Twitter API."""
 
     client: Any | None = None
+    v1_api: Any | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -42,7 +43,16 @@ class TwitterApiWrapper(BaseModel):
             return_type=dict,
         )
 
+        auth = tweepy.OAuth1UserHandler(
+            consumer_key=api_key,
+            consumer_secret=api_secret,
+            access_token=access_token,
+            access_token_secret=access_token_secret,
+        )
+        v1_api = tweepy.API(auth)
+
         values["client"] = client
+        values["v1_api"] = v1_api
         values["api_key"] = api_key
         values["api_secret"] = api_secret
         values["access_token"] = access_token

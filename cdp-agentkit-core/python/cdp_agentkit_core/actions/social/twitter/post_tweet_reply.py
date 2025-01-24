@@ -31,15 +31,20 @@ class PostTweetReplyInput(BaseModel):
         description="The text of the tweet to post in reply to another tweet on twitter. Tweets can be maximum 280 characters.",
     )
 
+    media_id: str | None = Field(
+        None,
+        description="Optional media id to attach media to the tweet reply",
+    )
 
-def post_tweet_reply(client: tweepy.Client, tweet_id: str, tweet_reply: str) -> str:
+
+def post_tweet_reply(client: tweepy.Client, tweet_id: str, tweet_reply: str, media_id: str | None = None) -> str:
     """Post tweet reply to Twitter.
 
     Args:
         client (tweepy.Client): The tweepy client to use.
         tweet_id (str): The id of the tweet to reply to in twitter.
         tweet_reply (str): The text of the reply to post in reponse to a tweet on twitter.
-
+        media_id (str | None, optional): The media id of the media to post in reponse to a tweet on twitter. Defaults to None.
     Returns:
         str: A message containing the result of the reply action and any associated data.
 
@@ -47,7 +52,11 @@ def post_tweet_reply(client: tweepy.Client, tweet_id: str, tweet_reply: str) -> 
     message = ""
 
     try:
-        response = client.create_tweet(in_reply_to_tweet_id=tweet_id, text=tweet_reply)
+        tweet_params = {"in_reply_to_tweet_id": tweet_id, "text": tweet_reply}
+        if media_id is not None:
+            tweet_params["media_ids"] = [media_id]
+        
+        response = client.create_tweet(**tweet_params)
         message = f"Successfully posted reply to Twitter:\n{dumps(response)}"
     except tweepy.errors.TweepyException as e:
         message = f"Error posting reply to Twitter:\n{e}"
