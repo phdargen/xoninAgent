@@ -25,6 +25,8 @@ from cdp.smart_contract import SmartContract
 from cdp.address import Address
 import tweepy
 
+import cairosvg
+
 # Settings
 # ---------
 
@@ -173,19 +175,18 @@ def get_transaction_data(tx_hash):
 # Helper functions
 # ---------
 
-# import cairosvg
+def save_svg_to_png(file_number, svg_content) -> str:
+    """
+    Saves the given SVG content as a PNG file.
 
-# def save_svg_to_png(file_number, svg_content):
-#     """
-#     Saves the given SVG content as a PNG file.
-
-#     Parameters:
-#         file_number (int): The identifier number for the file name.
-#         svg_content (str): The SVG content as a string.
-#     """
-#     file_name = f"output_{file_number}.png"
-#     cairosvg.svg2png(bytestring=svg_content.encode('utf-8'), write_to=file_name)
-#     print(f"SVG saved as PNG: {file_name}")
+    Parameters:
+        file_number (int): The identifier number for the file name.
+        svg_content (str): The SVG content as a string.
+    """
+    file_name = f"output_{file_number}.png"
+    cairosvg.svg2png(bytestring=svg_content.encode('utf-8'), write_to=file_name)
+    print(f"SVG saved as PNG: {file_name}")
+    return file_name
 
 # Mint nft functions
 # ---------
@@ -385,7 +386,7 @@ def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_a
         twitter_client = twitter_wrapper.v1_api
 
         # Upload media to Twitter
-        png_file = "xonin.png"
+        png_file = save_svg_to_png(token_id, svg_data)
         if not os.path.exists(png_file):
             raise ValueError(f"PNG file {png_file} not found")
             
