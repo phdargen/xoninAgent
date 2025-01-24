@@ -1,0 +1,45 @@
+name: Daily Bot Run
+
+on:
+  schedule:
+    - cron: '0 12 * * *'  # Runs at 12:00 UTC every day
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libcairo2-dev pkg-config python3-dev
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install Poetry
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 -
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        
+    - name: Install dependencies
+      working-directory: ./agentkit/cdp-langchain/examples/chatbot-python
+      run: poetry install
+        
+    - name: Run bot
+      working-directory: ./agentkit/cdp-langchain/examples/chatbot-python
+      env:
+        NETWORK_ID: ${{ secrets.NETWORK_ID }}
+        ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
+        TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
+        TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+        TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
+        CDP_WALLET_DATA: ${{ secrets.CDP_WALLET_DATA }}
+      run: |
+        poetry run python chatbot.py

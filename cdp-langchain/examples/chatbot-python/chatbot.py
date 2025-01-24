@@ -35,8 +35,9 @@ wallet_data_file = "wallet_data.txt"
 last_check_file = "last_check_time.txt"
 
 # NFT Contract configuration
-NFT_CONTRACT_ADDRESS = "0x32f75546e56aEC829ce13A9b73d4ebb42bF56b9c"
-NFT_PRICE = Decimal("0.001") # in ETH
+network_id = os.getenv('NETWORK_ID')
+NFT_CONTRACT_ADDRESS = "0x692E25F69857ceee22d5fdE61E67De1fcE7EA274" if network_id == "base" else "0x32f75546e56aEC829ce13A9b73d4ebb42bF56b9c"
+NFT_PRICE = Decimal("0.001") if network_id == "base" else Decimal("0.0001") # in ETH
 
 # Add at the top with other constants
 DEBUG_MODE = True
@@ -191,7 +192,7 @@ def save_svg_to_png(file_number, svg_content) -> str:
 # Mint nft functions
 # ---------
 MINT_MYNFT_PROMPT = """
-This tool will mint a Xonin NFT and transfer it directly to the specified address by paying 0.001 ETH.
+This tool will mint a Xonin NFT and transfer it directly to the specified address by paying {NFT_PRICE} ETH.
 The NFT will be minted and transferred in a single transaction.
 """
 
