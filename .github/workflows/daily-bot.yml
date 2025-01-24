@@ -28,11 +28,11 @@ jobs:
         echo "$HOME/.local/bin" >> $GITHUB_PATH
         
     - name: Install dependencies
-      working-directory: ./agentkit/cdp-langchain/examples/chatbot-python
+      working-directory: ./cdp-langchain/examples/chatbot-python
       run: poetry install
         
     - name: Run bot
-      working-directory: ./agentkit/cdp-langchain/examples/chatbot-python
+      working-directory: ./cdp-langchain/examples/chatbot-python
       env:
         NETWORK_ID: ${{ secrets.NETWORK_ID }}
         ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
