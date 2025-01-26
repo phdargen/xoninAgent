@@ -36,9 +36,9 @@ last_check_file = "last_check_time.txt"
 
 # NFT Contract configuration
 network_id = os.getenv('NETWORK_ID')
-NFT_CONTRACT_ADDRESS = "0x692E25F69857ceee22d5fdE61E67De1fcE7EA274" if network_id == "base" else "0x32f75546e56aEC829ce13A9b73d4ebb42bF56b9c"
-NFT_PRICE = Decimal("0.001") if network_id == "base" else Decimal("0.0001") # in ETH
-
+NFT_CONTRACT_ADDRESS = "0x692E25F69857ceee22d5fdE61E67De1fcE7EA274" if network_id == "base-mainnet" else "0x32f75546e56aEC829ce13A9b73d4ebb42bF56b9c"
+NFT_PRICE = Decimal("0.001") if network_id == "base-mainnet" else Decimal("0.0001") # in ETH
+REPUTATION_THRESHOLD = 10
 # Add at the top with other constants
 DEBUG_MODE = True
 DUMMY_MENTIONS_FILE = "dummy_mentions.txt"
@@ -61,32 +61,26 @@ abi = [
 # Helper classes
 # ---------
 class MentionMemory:
+    """Store and manage tweet mentions."""
     def __init__(self):
-        self.processed_mentions = {}
-        self.last_tweet_id = None
+        self.memory = {"mentions": {}, "last_tweet_id": None}
         self.load_memory()
-    
+
     def load_memory(self):
         """Load processed mentions from file."""
         if os.path.exists(MENTION_MEMORY_FILE):
             try:
                 with open(MENTION_MEMORY_FILE, 'r') as f:
                     data = json.load(f)
-                    self.processed_mentions = data.get("mentions", {})
-                    self.last_tweet_id = data.get("last_tweet_id")
+                    self.memory = data
             except json.JSONDecodeError:
                 print("Error loading mention memory, starting fresh")
-                self.processed_mentions = {}
-                self.last_tweet_id = None
+                self.memory = {"mentions": {}, "last_tweet_id": None}
     
     def save_memory(self):
         """Save processed mentions to file."""
-        data = {
-            "mentions": self.processed_mentions,
-            "last_tweet_id": self.last_tweet_id
-        }
         with open(MENTION_MEMORY_FILE, 'w') as f:
-            json.dump(data, f, indent=2)
+            json.dump(self.memory, f, indent=2)
     
     def update_last_tweet_id(self, tweets):
         """Update the last tweet ID from a list of tweets."""
@@ -94,13 +88,13 @@ class MentionMemory:
             # Get the newest tweet ID
             newest_id = max(int(tweet["id"]) for tweet in tweets)
             # Update if it's newer than what we have
-            if not self.last_tweet_id or int(newest_id) > int(self.last_tweet_id):
-                self.last_tweet_id = str(newest_id)
+            if not self.memory["last_tweet_id"] or int(newest_id) > int(self.memory["last_tweet_id"]):
+                self.memory["last_tweet_id"] = str(newest_id)
                 self.save_memory()
 
     def is_processed(self, tweet_id):
         """Check if a tweet has been processed."""
-        return tweet_id in self.processed_mentions
+        return tweet_id in self.memory["mentions"]
     
     def add_mention(self, tweet_id, tweet_text, status, mint_success=False, tx_hash=None, reply_id=None, author=None, author_id=None):
         """Add a processed mention to memory."""
@@ -126,16 +120,17 @@ class MentionMemory:
         if reply_id:
             mention_data["reply_id"] = reply_id
             
-        self.processed_mentions[tweet_id] = mention_data
+        self.memory["mentions"][tweet_id] = mention_data
         self.save_memory()
 
-    def has_successful_mint(self, author_id):
-        """Check if user has already successfully minted an NFT."""
-        for tweet_id, mention in self.processed_mentions.items():
-            if (mention.get("author", {}).get("id") == author_id and 
-                mention.get("status") == "processed" and 
-                mention.get("mint_success")):
-                return tweet_id
+    def has_successful_mint(self, author_id, address=None):
+        """Check if author or address has already minted successfully."""
+        for tweet_id, mention in self.memory["mentions"].items():
+            if mention.get("mint_success"):
+                # Check both author_id and minted_address
+                if (mention.get("author_id") == author_id or 
+                    (address and mention.get("minted_address", "").lower() == address.lower())):
+                    return tweet_id
         return None
 
 # Helper onchain functions
@@ -151,13 +146,27 @@ def check_eth_balance(wallet: Wallet, address: str):
         
         # Get ETH balance directly using balance() method
         balance_eth = addr.balance("eth")
+
+        reputation = addr.reputation()
+        print(f"Reputation for {address}: {reputation}")
         
         print(f"ETH Balance for {address}: {balance_eth} ETH")
+        print(f"Reputation for {address}: {reputation}")
         return balance_eth > 0
 
     except Exception as e:
             print(f"Error checking ETH balance: {e}")
             return False
+
+def check_reputation(address: str):
+    """Check if address reputation using CDP SDK."""
+    addr = Address(
+        network_id="base-mainnet",
+        address_id=address
+    )
+    reputation = addr.reputation()
+            
+    return reputation
 
 def get_transaction_data(tx_hash):
     url = f"https://api-sepolia.basescan.org/api?module=proxy&action=eth_getTransactionReceipt&txhash={tx_hash}&apikey={etherscan_api_key}"
@@ -345,7 +354,7 @@ def is_valid_mint_request_with_feedback(tweet_text):
     
     return address, "valid"
 
-def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_address, twitter_wrapper, author=None):
+def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_address, twitter_wrapper, author=None, reputation=None):
     """Process an NFT mint request."""
     try:
         print(f"Starting mint process for {eth_address}...")
@@ -402,8 +411,8 @@ def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_a
         greeting = f"@{author}! " if author else ""
         reply_prompt = (
             f"Use post_tweet_reply and attach the media ID: {media_id} to reply to tweet {tweet_id} with a personalized message about the successful mint such as:\n"
-            f"{greeting} successfully minted {name}! Have fun with your fully onchain art on @base! Visit https://xonin.vercel.app/ to learn more about the project! Here's the transaction link: {txLink}.'"
-            f"Be creative in conveying this message!"
+            f"'Fuiyoh {greeting}, your onchain reputation score is {reputation.score}! That's so based! I minted {name} for you! Have fun with your fully onchain art on @base! Visit https://xonin.vercel.app/ to learn more about the project! Here's the transaction link: {txLink}.'"
+            f"Be creative in conveying this message! You may also use the following metadata to make it more personal: {reputation.metadata}. The score is between -100 (risky) and +100 (crypto-forward) providing directional indication of its onchain reputation. You can use this to assess how crypto-forward a user is (and tailor experiences based on that)."
         )
 
         print("Sending reply tweet...")
@@ -414,15 +423,16 @@ def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_a
                 response = chunk["tools"]["messages"][0].content
                 print(f"Reply response: {response}")
 
-        return True, txHash
+        mint_success, tx_hash = True, txHash  # Set success flag and return tx hash
+        return mint_success, tx_hash, eth_address  # Return the address too
 
     except Exception as e:
         error_msg = f"Error processing mint request: {e}"
         print(error_msg)
-        return False, None
+        return False, None, None
 
 
-def send_error_reply(agent_executor, config, tweet_id, error_type, address=None, author=None, previous_tweet_id=None):
+def send_error_reply(agent_executor, config, tweet_id, error_type, address=None, author=None, previous_tweet_id=None, reputation=None):
     """Send error reply tweet and return reply ID if successful."""
     greeting = f"Hey @{author}! " if author else ""
     
@@ -436,7 +446,7 @@ def send_error_reply(agent_executor, config, tweet_id, error_type, address=None,
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
             f"'{greeting}Sorry, the address {address} has 0 ETH balance. Please provide an active address. You can always mint your NFT at https://xonin.vercel.app/.'"
-            f"Or more humorously like: '{greeting}Why so poor? Get some ETH first.' Be creative in conveying this message!"
+            f"Or more humorously like: 'Haiyaa {author}, why so poor? Get some ETH first.' Be creative in conveying this message!"
         )
     elif error_type == "already_minted":
         reply_prompt = (
@@ -444,7 +454,13 @@ def send_error_reply(agent_executor, config, tweet_id, error_type, address=None,
             f"'{greeting}You have already minted an NFT. "
             "This is limited to one NFT per user, don't be greedy! You can mint another one yourself at https://xonin.vercel.app/.' Be creative in conveying this message!"
         )
-    
+    elif error_type == "low_reputation":
+        reply_prompt = (
+            f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
+            f"'Haiyaa {author}, your onchain reputation score is only {reputation.score}. Why so low? Sorry, no free NFT for you. You can always mint your own at https://xonin.vercel.app/.'"
+            f"Be creative in conveying this message! You may also use the following metadata to make it more personal and advide how to improve the score: {reputation.metadata}. The score is between -100 (risky) and +100 (crypto-forward) providing directional indication of its onchain reputation. You can use this to assess how crypto-forward a user is (and tailor experiences based on that)."
+        )
+
     reply_id = None
     for chunk in agent_executor.stream(
         {"messages": [HumanMessage(content=reply_prompt)]}, config
@@ -514,11 +530,29 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
             reply_id=reply_id
         )
         return True
-        
-    # Check if user has already minted successfully
-    previous_tweet_id = mention_memory.has_successful_mint(author_id)
+
+    # Check reputation
+    reputation = check_reputation(address)
+    print(f"Reputation score: {reputation.score}")
+    print(f"Reputation metadata: {reputation.metadata}")
+
+    if reputation.score < REPUTATION_THRESHOLD:
+        print(f"Reputation score is too low: {reputation.score}")
+        reply_id = send_error_reply(agent_executor, config, tweet_id, "low_reputation", address, author, reputation)
+        mention_memory.add_mention(
+            tweet_id,
+            tweet_text,
+            "low_reputation",
+            author=author,
+            author_id=author_id,
+            reply_id=reply_id
+        )
+        return True
+
+    # Check if user or address has already minted successfully
+    previous_tweet_id = mention_memory.has_successful_mint(author_id, address)
     if previous_tweet_id:
-        print(f"User @{author} has already minted an NFT")
+        print(f"User @{author} or address {address} has already minted an NFT")
         reply_id = send_error_reply(
             agent_executor, 
             config, 
@@ -542,13 +576,14 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
     print(f"Processing mint request for address: {address}")
     
     try:
-        mint_success, tx_hash = process_mint_request(agent_executor, wallet, config, tweet_id, address, twitter_wrapper, author)
+        mint_success, tx_hash, minted_address = process_mint_request(agent_executor, wallet, config, tweet_id, address, twitter_wrapper, author, reputation)
         mention_memory.add_mention(
             tweet_id,
             tweet_text,
             "processed",
             mint_success=mint_success,
             tx_hash=tx_hash,
+            minted_address=minted_address,  # Store the minted address
             author=author,
             author_id=author_id
         )
@@ -592,6 +627,8 @@ def initialize_agent():
 
     wallet = agentkit.wallet
     print(f"Wallet: {wallet}")
+    check_eth_balance(wallet, wallet.default_address.address_id)
+    #score, metadata = check_reputation( wallet.default_address.address_id)
 
     # Initialize Twitter wrapper using the existing TwitterApiWrapper
     values = {}
@@ -657,7 +694,7 @@ def run_autonomous_mode(agent_executor, wallet: Wallet, config, tools, twitter_w
     while True:
         try:
             # Get mentions (either from API or dummy file)
-            all_tweets = get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id=mention_memory.last_tweet_id)
+            all_tweets = get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id=mention_memory.memory["last_tweet_id"])
             mentions_found = False
             
             # Process all tweets

@@ -30,7 +30,14 @@ jobs:
     - name: Install dependencies
       working-directory: ./cdp-langchain/examples/chatbot-python
       run: poetry install
-        
+    
+    - name: Create wallet
+      working-directory: ./cdp-langchain/examples/chatbot-python
+      run: |
+        echo "$WALLET_SECRET" > wallet_data.txt
+      env:
+        WALLET_SECRET: ${{ secrets.WALLET_SECRET }}
+
     - name: Run bot
       working-directory: ./cdp-langchain/examples/chatbot-python
       env:
