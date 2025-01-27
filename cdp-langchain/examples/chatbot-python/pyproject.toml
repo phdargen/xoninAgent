@@ -7,7 +7,7 @@ readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
 cdp-langchain = "^0.0.11"
 twitter-langchain = { path = "../../../twitter-langchain/python", develop = true }
 eth-utils = ">=5.0.0"
@@ -15,6 +15,7 @@ cdp-agentkit-core = { path = "../../../cdp-agentkit-core/python", develop = true
 requests = "^2.31.0"
 cairosvg = "^2.7.1"
 pycairo = "^1.27.0"
+wand = "^0.6.13"
 
 [build-system]
 requires = ["poetry-core"]

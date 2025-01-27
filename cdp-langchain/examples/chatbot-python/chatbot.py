@@ -23,9 +23,11 @@ from pydantic import BaseModel, Field
 from cdp import Wallet
 from cdp.smart_contract import SmartContract
 from cdp.address import Address
+from cdp.address_reputation import AddressReputation
 import tweepy
 
 import cairosvg
+import random
 
 # Settings
 # ---------
@@ -37,9 +39,9 @@ last_check_file = "last_check_time.txt"
 # NFT Contract configuration
 network_id = os.getenv('NETWORK_ID')
 NFT_CONTRACT_ADDRESS = "0x692E25F69857ceee22d5fdE61E67De1fcE7EA274" if network_id == "base-mainnet" else "0x32f75546e56aEC829ce13A9b73d4ebb42bF56b9c"
-NFT_PRICE = Decimal("0.001") if network_id == "base-mainnet" else Decimal("0.0001") # in ETH
-REPUTATION_THRESHOLD = 10
-# Add at the top with other constants
+NFT_PRICE = Decimal("0.001") if network_id == "base-mainnet" else Decimal("0.001") # in ETH
+REPUTATION_THRESHOLD = 20
+
 DEBUG_MODE = True
 DUMMY_MENTIONS_FILE = "dummy_mentions.txt"
 MENTION_MEMORY_FILE = "mention_memory.txt"
@@ -47,6 +49,7 @@ MENTION_MEMORY_FILE = "mention_memory.txt"
 etherscan_api_key = os.getenv('ETHERSCAN_API_KEY')
 if not etherscan_api_key:
     raise ValueError("ETHERSCAN_API_KEY environment variable is not set")
+ETHERSCAN_URL = "https://api.basescan.org/api" if network_id == "base-mainnet" else "https://api-sepolia.basescan.org/api"
 
 abi = [
     {
@@ -96,7 +99,7 @@ class MentionMemory:
         """Check if a tweet has been processed."""
         return tweet_id in self.memory["mentions"]
     
-    def add_mention(self, tweet_id, tweet_text, status, mint_success=False, tx_hash=None, reply_id=None, author=None, author_id=None):
+    def add_mention(self, tweet_id, tweet_text, status, mint_success=False, tx_hash=None, reply_id=None, author=None, author_id=None, minted_address=None):
         """Add a processed mention to memory."""
         # Don't save not_mint_request mentions
         if status == "not_mint_request":
@@ -119,6 +122,8 @@ class MentionMemory:
             mention_data["transaction_hash"] = tx_hash
         if reply_id:
             mention_data["reply_id"] = reply_id
+        if minted_address:
+            mention_data["minted_address"] = minted_address
             
         self.memory["mentions"][tweet_id] = mention_data
         self.save_memory()
@@ -143,22 +148,16 @@ def check_eth_balance(wallet: Wallet, address: str):
             network_id=wallet.network_id,
             address_id=address
         )
-        
         # Get ETH balance directly using balance() method
         balance_eth = addr.balance("eth")
-
-        reputation = addr.reputation()
-        print(f"Reputation for {address}: {reputation}")
-        
         print(f"ETH Balance for {address}: {balance_eth} ETH")
-        print(f"Reputation for {address}: {reputation}")
         return balance_eth > 0
 
     except Exception as e:
             print(f"Error checking ETH balance: {e}")
             return False
 
-def check_reputation(address: str):
+def check_reputation(address: str) -> AddressReputation:
     """Check if address reputation using CDP SDK."""
     addr = Address(
         network_id="base-mainnet",
@@ -168,35 +167,120 @@ def check_reputation(address: str):
             
     return reputation
 
-def get_transaction_data(tx_hash):
-    url = f"https://api-sepolia.basescan.org/api?module=proxy&action=eth_getTransactionReceipt&txhash={tx_hash}&apikey={etherscan_api_key}"
+def get_transaction_data(tx_hash, max_retries=2, delay=15):
+    """Get transaction data from etherscan with retries."""
+    url = f"{ETHERSCAN_URL}?module=proxy&action=eth_getTransactionReceipt&txhash={tx_hash}&apikey={etherscan_api_key}"
+    
+    for attempt in range(max_retries):
+        print(f"Getting transaction data for {tx_hash} from etherscan: {ETHERSCAN_URL} (Attempt {attempt + 1}/{max_retries})")
 
-    print(f"Getting transaction data for {tx_hash} from etherscan")
+        response = requests.get(url)
+        data = response.json()
+        print(f"Transaction data: {data}")
 
-    response = requests.get(url)
-    data = response.json()
+        # Check if we have a valid result
+        if data.get('result'):
+            # Check transaction status (1 = success, 0 = failure)
+            status = int(data['result'].get('status', '0'), 16)
+            if status == 0:
+                print("Transaction failed")
+                if attempt < max_retries - 1:
+                    print(f"Will retry mint in {delay} seconds...")
+                    time.sleep(delay)
+                    return None, None, False  
+                return None, None, False
 
-    last_log = data['result']['logs'][-1]
-    int_value = int(last_log['topics'][3], 16)
-    contract_address = last_log['address']
+            # Transaction successful, get logs
+            logs = data['result'].get('logs', [])
+            if logs:
+                try:
+                    last_log = logs[-1]
+                    if last_log.get('topics') and len(last_log['topics']) >= 4:
+                        int_value = int(last_log['topics'][3], 16)
+                        contract_address = last_log['address']
+                        return int_value, contract_address, True
+                except Exception as e:
+                    print(f"Error parsing log data: {e}")
 
-    return int_value, contract_address
+        if attempt < max_retries - 1:  # Don't sleep on the last attempt
+            print(f"Transaction data not ready yet, waiting {delay} seconds before retry...")
+            time.sleep(delay)
+        else:
+            print("Max retries reached, transaction data not available")
+
+    return None, None, False  
 
 # Helper functions
 # ---------
 
-def save_svg_to_png(file_number, svg_content) -> str:
+# def save_svg_to_png(contract_address, token_id, svg_content) -> str:
+#     """
+#     Saves the given SVG content as a PNG file.
+
+#     Parameters:
+#         file_number (int): The identifier number for the file name.
+#         svg_content (str): The SVG content as a string.
+#     """
+#     try:
+#         file_name = f"output_{contract_address}_{token_id}.png"
+        
+#         # Ensure SVG content is properly formatted
+#         if not svg_content.strip().startswith('<svg'):
+#             print("Invalid SVG content")
+#             return None
+
+#         # Save svg to file
+#         print(f"svg_content: {svg_content}")
+#         with open(f"output_{contract_address}_{token_id}.svg", "w") as f:
+#             f.write(svg_content)
+
+#         # Convert with error handling
+#         cairosvg.svg2png(
+#             url=f"output_{contract_address}_{token_id}.svg",
+#             write_to=file_name
+#         )
+        
+#         print(f"SVG saved as PNG: {file_name}")
+#         return file_name
+#     except Exception as e:
+#         print(f"Error saving SVG to PNG: {e}")
+#         return None
+
+from wand.image import Image
+
+def save_svg_to_png(contract_address, token_id, svg_content) -> str:
     """
-    Saves the given SVG content as a PNG file.
+    Saves the given SVG content as a PNG file using ImageMagick via wand.
 
     Parameters:
-        file_number (int): The identifier number for the file name.
+        contract_address (str): The contract address for the file name.
+        token_id (int): The identifier number for the token.
         svg_content (str): The SVG content as a string.
     """
-    file_name = f"output_{file_number}.png"
-    cairosvg.svg2png(bytestring=svg_content.encode('utf-8'), write_to=file_name)
-    print(f"SVG saved as PNG: {file_name}")
-    return file_name
+    try:
+        file_name = f"output_{contract_address}_{token_id}.png"
+        
+        # Ensure SVG content is properly formatted
+        if not svg_content.strip().startswith('<svg'):
+            print("Invalid SVG content")
+            return None
+
+        # Save svg content to a temporary file
+        svg_file = f"output_{contract_address}_{token_id}.svg"
+        with open(svg_file, "w") as f:
+            f.write(svg_content)
+        
+        # Convert SVG to PNG using wand (ImageMagick)
+        with Image(filename=svg_file, format='svg') as img:
+            img.format = 'png'
+            img.save(filename=file_name)
+        
+        print(f"SVG saved as PNG: {file_name}")
+        return file_name
+    except Exception as e:
+        print(f"Error saving SVG to PNG: {e}")
+        return None
+
 
 # Mint nft functions
 # ---------
@@ -247,6 +331,7 @@ def get_token_uri_and_svg(wallet: Wallet, contract_address: str, token_id: int) 
 def mint_myNft(wallet: Wallet, recipient_address: str) -> str:
     """Mint a Xonin NFT and transfer it to the specified address."""  
     try:
+        print(f"Minting NFT for {recipient_address} from contract {NFT_CONTRACT_ADDRESS} on network {network_id} with price {NFT_PRICE} ETH")
         mint_invocation = wallet.invoke_contract(
             contract_address=NFT_CONTRACT_ADDRESS,
             abi=abi,
@@ -256,6 +341,7 @@ def mint_myNft(wallet: Wallet, recipient_address: str) -> str:
             asset_id="eth",
         ).wait()
         
+        # Get transaction data
         return (f"🎉 Successfully minted NFT for {recipient_address}!\n\n"
                 f"🔗 Transaction: {mint_invocation.transaction.transaction_link}\n"
                 f"Transaction hash: {mint_invocation.transaction.transaction_hash}\n"
@@ -354,88 +440,105 @@ def is_valid_mint_request_with_feedback(tweet_text):
     
     return address, "valid"
 
-def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_address, twitter_wrapper, author=None, reputation=None):
+def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_address, twitter_wrapper, author=None, reputation: AddressReputation=None):
     """Process an NFT mint request."""
-    try:
-        print(f"Starting mint process for {eth_address}...")
-        
-        # Mint NFT and get response
-        mint_response = mint_myNft(wallet, eth_address)
-        print(f"Mint response: {mint_response}")
-        
-        # Check if there was an error in minting
-        if "Error" in mint_response:
-            raise Exception(mint_response)
 
-        # Get txHash from mint response
-        txHash = re.search(r'Transaction hash: (\w+)', mint_response)
-        if not txHash:
-            raise ValueError("Could not find transaction hash in mint response")
-        txHash = txHash.group(1)
-        print(f"Transaction hash: {txHash}")
+    # Mint NFT
+    print(f"Starting mint process for {eth_address}...")
+    mint_result = mint_myNft(wallet, eth_address)
+    print(f"Mint response: {mint_result}")
+                    
+    # Extract transaction hash from the result
+    txHash = mint_result.split("Transaction hash: ")[1].strip()
+    txLink = mint_result.split("Transaction: ")[1].strip()
 
-        # Get transaction link - update pattern to capture full URL
-        txLink = re.search(r'Transaction: (https://[^\s\n]+)', mint_response)
-        if not txLink:
-            raise ValueError("Could not find transaction link in mint response")
-        txLink = txLink.group(1)
-        print(f"Transaction link: {txLink}")
+    # Get transaction info
+    token_id, contract_address, success = get_transaction_data(txHash)
+    if not success:
+        print("Transaction failed")
+        return False, txHash, eth_address
 
-        # Get transaction info
-        token_id, nft_mint_address = get_transaction_data(txHash)
-        print(f"Token ID: {token_id}, NFT Mint Address: {nft_mint_address}")
+    if token_id is None or contract_address is None:
+        print("Could not get token data from transaction")
+        return False, txHash, eth_address
 
-        # Get token URI, name and SVG after minting
-        token_uri, name, svg_data = get_token_uri_and_svg(wallet, nft_mint_address, token_id)
-        print(f"Minted NFT: {name}")
+    # Get token URI, name and SVG after minting
+    token_uri, name, svg_data = get_token_uri_and_svg(wallet, contract_address, token_id)
+    if not name or not svg_data:
+        print("Could not get token URI and SVG")
+        return False, txHash, eth_address
 
-        if not svg_data:
-            raise ValueError("Could not get SVG data for NFT")
-                
-        # Get Twitter API wrapper from tools list
-        twitter_client = twitter_wrapper.v1_api
+    print(f"Minted NFT: {name}")
 
-        # Upload media to Twitter
-        png_file = save_svg_to_png(token_id, svg_data)
-        if not os.path.exists(png_file):
-            raise ValueError(f"PNG file {png_file} not found")
-            
+    # Get Twitter API wrapper from tools list
+    twitter_client = twitter_wrapper.v1_api
+
+    # Upload media to Twitter
+    png_file = save_svg_to_png(contract_address, token_id, svg_data)
+    if not png_file:
+        print("Failed to convert SVG to PNG")
+    else:
         media = twitter_client.media_upload(png_file)
         if not media:
-            raise ValueError("Failed to upload media to Twitter")
-            
-        media_id = media.media_id_string
-        print(f"Uploaded media to Twitter, ID: {media_id}")
+            print("Failed to upload media to Twitter")        
+        else: 
+            media_id = media.media_id_string
+            print(f"Uploaded media to Twitter, ID: {media_id}")
 
-        # Post reply with media
-        greeting = f"@{author}! " if author else ""
-        reply_prompt = (
-            f"Use post_tweet_reply and attach the media ID: {media_id} to reply to tweet {tweet_id} with a personalized message about the successful mint such as:\n"
-            f"'Fuiyoh {greeting}, your onchain reputation score is {reputation.score}! That's so based! I minted {name} for you! Have fun with your fully onchain art on @base! Visit https://xonin.vercel.app/ to learn more about the project! Here's the transaction link: {txLink}.'"
-            f"Be creative in conveying this message! You may also use the following metadata to make it more personal: {reputation.metadata}. The score is between -100 (risky) and +100 (crypto-forward) providing directional indication of its onchain reputation. You can use this to assess how crypto-forward a user is (and tailor experiences based on that)."
-        )
+    metric_msg = ""
+    if reputation.score > 0:
+        # Extract metrics from metadata
+        metadata_str = str(reputation.metadata)
+        key_metrics = {
+            "total_transactions": "transactions",
+            "unique_days_active": "days active",
+            "token_swaps_performed": "token swaps",
+            "smart_contract_deployments": "smart contracts deployed",
+            "lend_borrow_stake_transactions": "lending/borrowing actions",
+            "bridge_transactions_performed": "bridge transactions",
+            "ens_contract_interactions": "ENS interactions"
+        }
+        
+        # Find all metrics with values > 0
+        positive_metrics = {}
+        for key, label in key_metrics.items():
+            match = re.search(f"{key}=(-?\d+)", metadata_str)
+            if match:
+                value = int(match.group(1))
+                if value > 0:
+                    positive_metrics[label] = value
 
-        print("Sending reply tweet...")
-        for chunk in agent_executor.stream(
-            {"messages": [HumanMessage(content=reply_prompt)]}, config
-        ):
-            if "tools" in chunk:
-                response = chunk["tools"]["messages"][0].content
-                print(f"Reply response: {response}")
+        # Randomly choose one positive metric if any exist
+        if positive_metrics:
+            key, value = random.choice(list(positive_metrics.items()))
+            print(f"Selected metric: {value} {key}")
+            metric_msg = f"You may also use the following information to praise the user: {positive_metrics[key]} {key}."
 
-        mint_success, tx_hash = True, txHash  # Set success flag and return tx hash
-        return mint_success, tx_hash, eth_address  # Return the address too
+    # Post reply with media
+    greeting = f"@{author}! " if author else ""
+    media_id_message = f"and attach the media ID: {media_id} " if media_id else ""
+    reply_prompt = (
+        f"Use post_tweet_reply {media_id_message} to reply to tweet {tweet_id} with a personalized message about the successful mint such as:\n"
+        f"'Fuiyoh {greeting}, your onchain reputation score is {reputation.score}! That's so based! I minted {name} for you! Have fun with your fully onchain art on @base! Visit https://xonin.vercel.app/ to learn more about the project! Here's the transaction link: {txLink}.'"
+        f"Be creative in conveying this message! For context, the score is between -100 (risky) and +100 (crypto-forward)."
+        f"{metric_msg}"
+    )
 
-    except Exception as e:
-        error_msg = f"Error processing mint request: {e}"
-        print(error_msg)
-        return False, None, None
+    print("Sending reply tweet...")
+    for chunk in agent_executor.stream(
+        {"messages": [HumanMessage(content=reply_prompt)]}, config
+    ):
+        if "tools" in chunk:
+            response = chunk["tools"]["messages"][0].content
+            print(f"Reply response: {response}")
+
+    return True, txHash, eth_address  
 
 
-def send_error_reply(agent_executor, config, tweet_id, error_type, address=None, author=None, previous_tweet_id=None, reputation=None):
+def send_error_reply(agent_executor, config, tweet_id, error_type, address=None, author=None, reputation: AddressReputation=None):
     """Send error reply tweet and return reply ID if successful."""
     greeting = f"Hey @{author}! " if author else ""
-    
+    print(f"Sending error reply for {error_type}...")
     if error_type == "invalid_address":
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
@@ -455,20 +558,52 @@ def send_error_reply(agent_executor, config, tweet_id, error_type, address=None,
             "This is limited to one NFT per user, don't be greedy! You can mint another one yourself at https://xonin.vercel.app/.' Be creative in conveying this message!"
         )
     elif error_type == "low_reputation":
+        metric_msg = ""
+        if reputation.score > 0:
+            # Extract metrics from metadata
+            metadata_str = str(reputation.metadata)
+            key_metrics = {
+                "total_transactions": "transactions",
+                "unique_days_active": "days active",
+                "token_swaps_performed": "token swaps",
+                "smart_contract_deployments": "smart contracts deployed",
+                "lend_borrow_stake_transactions": "lending/borrowing actions",
+                "bridge_transactions_performed": "bridge transactions",
+                "ens_contract_interactions": "ENS interactions"
+            }
+            
+            # Find all metrics and their values
+            metrics = {}
+            for key, label in key_metrics.items():
+                match = re.search(f"{key}=(-?\d+)", metadata_str)  
+                if match:
+                    value = int(match.group(1))
+                    metrics[label] = value
+
+            # Randomly choose one metric 
+            if metrics:
+                key, value = random.choice(list(metrics.items()))
+                print(f"Selected metric: {value} {key}")
+                metric_msg = f"You may also use the following information to praise the user: {value} {key}."
+
+        print(f"Metric message: {metric_msg}")
+
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"'Haiyaa {author}, your onchain reputation score is only {reputation.score}. Why so low? Sorry, no free NFT for you. You can always mint your own at https://xonin.vercel.app/.'"
-            f"Be creative in conveying this message! You may also use the following metadata to make it more personal and advide how to improve the score: {reputation.metadata}. The score is between -100 (risky) and +100 (crypto-forward) providing directional indication of its onchain reputation. You can use this to assess how crypto-forward a user is (and tailor experiences based on that)."
+            f"'Haiyaa @{author}, your onchain reputation score is only {reputation.score}. Why so low?"
+            f"Sorry, no free NFT for you. You can always mint your own at https://xonin.vercel.app/.'"
+            f"Be creative in conveying this message! For context, the score is between -100 (risky) and +100 (crypto-forward)."
+            f"{metric_msg}."
         )
 
     reply_id = None
+    print("Sending reply tweet...")
     for chunk in agent_executor.stream(
         {"messages": [HumanMessage(content=reply_prompt)]}, config
     ):
-        if "agent" in chunk:
-            print(chunk["agent"]["messages"][0].content)
-        elif "tools" in chunk:
+        if "tools" in chunk:
             response = chunk["tools"]["messages"][0].content
+            print(f"Reply response: {response}")
             try:
                 json_start = response.find('{')
                 json_end = response.rfind('}') + 1
@@ -553,14 +688,7 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
     previous_tweet_id = mention_memory.has_successful_mint(author_id, address)
     if previous_tweet_id:
         print(f"User @{author} or address {address} has already minted an NFT")
-        reply_id = send_error_reply(
-            agent_executor, 
-            config, 
-            tweet_id, 
-            "already_minted", 
-            author=author,
-            previous_tweet_id=previous_tweet_id
-        )
+        reply_id = send_error_reply(agent_executor, config, tweet_id, "already_minted", address, author, reputation)
         mention_memory.add_mention(
             tweet_id,
             tweet_text,
@@ -572,7 +700,7 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
         return True
        
 
-    # Address is valid and has balance -> mint nft
+    # Address is valid and has balance + reputation -> mint nft
     print(f"Processing mint request for address: {address}")
     
     try:
@@ -583,7 +711,7 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
             "processed",
             mint_success=mint_success,
             tx_hash=tx_hash,
-            minted_address=minted_address,  # Store the minted address
+            minted_address=minted_address,  
             author=author,
             author_id=author_id
         )
@@ -728,7 +856,10 @@ def run_autonomous_mode(agent_executor, wallet: Wallet, config, tools, twitter_w
             mention_memory.save_memory()  # Save on error too
             print("Saved memory checkpoint...")
             print("Waiting before retry...")
-            time.sleep(interval)
+            if interval > 0:
+                time.sleep(interval)
+            else:
+                exit(0)
 
 def run_chat_mode(agent_executor, config):
     """Run the agent interactively based on user input."""
@@ -758,8 +889,8 @@ def main():
     agent_executor, wallet, config, tools, twitter_wrapper = initialize_agent()  # Get twitter_wrapper from initialize_agent
 
     #run_chat_mode(agent_executor=agent_executor, config=config)
-    run_autonomous_mode(agent_executor=agent_executor, wallet=wallet, config=config, tools=tools, twitter_wrapper=twitter_wrapper,interval=-1)
-    #save_svg_to_png(14, "<svg width='500' height='500' viewBox='0 0 500 500' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'><symbol id='c' viewBox='0 0 100 100'><circle cx='50' cy='50' r='25'></circle></symbol><symbol id='t' viewBox='0 0 100 100'><polygon points='0,100 100,100 50,0'></polygon></symbol><symbol id='b' viewBox='0 0 100 100'><rect width='500' height='50'></rect></symbol><filter id='f1' width='200%' height='200%'><feOffset in='SourceGraphic' result='r' dx='50' dy='20' /><feGaussianBlur in='r' result='rb' stdDeviation='0'/><feMerge><feMergeNode in='rb' /><feMergeNode in='SourceGraphic' /></feMerge></filter><symbol id='s'><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#aee239' fill-opacity='0.75' transform='translate(146 480)  scale(3.93)  rotate(56)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#8fbe00' fill-opacity='0.89' transform='translate(107 490)  scale(3.36)  rotate(291)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#aee239' fill-opacity='0.82' transform='translate(136 396)  scale(1.75)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#8fbe00' fill-opacity='0.79' transform='translate(393 342)  scale(3.82)  rotate(213)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.94' transform='translate(337 68)  scale(0.22)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.91' transform='translate(41 264)  scale(1.20)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#8fbe00' fill-opacity='0.79' transform='translate(128 281)  scale(2.72)  rotate(306)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#8fbe00' fill-opacity='0.87' transform='translate(71 410)  scale(2.23)  rotate(232)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#8fbe00' fill-opacity='0.76' transform='translate(385 446)  scale(1.59)  rotate(246)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.85' transform='translate(490 499)  scale(4.77)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#40c0cb' fill-opacity='0.66' transform='translate(350 202)  scale(2.63)  rotate(303)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#8fbe00' fill-opacity='0.93' transform='translate(341 78)  scale(2.32)  rotate(288)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#aee239' fill-opacity='0.69' transform='translate(196 46)  scale(0.1)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.87' transform='translate(154 314)  scale(1.68)  rotate(199)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.60' transform='translate(180 112)  scale(1.26)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#aee239' fill-opacity='0.84' transform='translate(337 232)  scale(0.49)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.79' transform='translate(454 75)  scale(1.56)  rotate(141)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#8fbe00' fill-opacity='0.78' transform='translate(47 158)  scale(4.5)  rotate(58)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.97' transform='translate(145 447)  scale(2.77)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#aee239' fill-opacity='0.75' transform='translate(132 1)  scale(4.8)  rotate(92)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.93' transform='translate(433 483)  scale(0.60)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#aee239' fill-opacity='0.69' transform='translate(362 205)  scale(3.90)  rotate(12)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.83' transform='translate(459 285)  scale(0.12)  rotate(22)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#f9f2e7' fill-opacity='0.72' transform='translate(25 80)  scale(2.21)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#aee239' fill-opacity='0.73' transform='translate(424 129)  scale(3.62)  rotate(100)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.67' transform='translate(217 396)  scale(1.21)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#8fbe00' fill-opacity='0.98' transform='translate(133 478)  scale(3.29)  rotate(114)' > </use></g><g class='g2'><use xlink:href='#t' width='100' height='100'  fill='#aee239' fill-opacity='0.70' transform='translate(426 402)  scale(2.16)  rotate(137)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#8fbe00' fill-opacity='0.68' transform='translate(434 291)  scale(2.60)' > </use></g><g class='g1'><use xlink:href='#b' width='100' height='100'  fill='#40c0cb' fill-opacity='0.72' transform='translate(290 278)  scale(2.71)  rotate(248)' > </use></g><g class='g3'><use xlink:href='#c' width='100' height='100'  fill='#40c0cb' fill-opacity='0.68' transform='translate(467 482)  scale(1.92)' > </use></g></symbol><g fill='#00a8c6'><rect width='500' height='500' /><use href='#s' filter='url(#f1)'/></g></svg>")
+    #run_autonomous_mode(agent_executor=agent_executor, wallet=wallet, config=config, tools=tools, twitter_wrapper=twitter_wrapper,interval=-1)
+    save_svg_to_png("test", 33, "<svg width='500' height='500' viewBox='0 0 500 500' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'><radialGradient id='g0' r='1' spreadMethod='reflect'><stop offset='0%' style='stop-color:#83988e;stop-opacity:0.40'/><stop offset='100%' style='stop-color:#83988e;stop-opacity:1'/></radialGradient><radialGradient id='g1' r='1' spreadMethod='reflect'><stop offset='0%' style='stop-color:#e6f9bc;stop-opacity:0.37'/><stop offset='100%' style='stop-color:#e6f9bc;stop-opacity:1'/></radialGradient><radialGradient id='g2' r='1' spreadMethod='reflect'><stop offset='0%' style='stop-color:#bcdea5;stop-opacity:0.57'/><stop offset='100%' style='stop-color:#574951;stop-opacity:1'/></radialGradient><radialGradient id='g3' r='1' spreadMethod='reflect'><stop offset='0%' style='stop-color:#574951;stop-opacity:0.60'/><stop offset='100%' style='stop-color:#e6f9bc;stop-opacity:1'/></radialGradient><radialGradient id='g4' r='1' spreadMethod='reflect'><stop offset='0%' style='stop-color:#574951;stop-opacity:0.80'/><stop offset='100%' style='stop-color:#574951;stop-opacity:1'/></radialGradient><radialGradient id='g5' r='1' spreadMethod='reflect'><stop offset='0%' style='stop-color:#574951;stop-opacity:0.64'/><stop offset='100%' style='stop-color:#574951;stop-opacity:1'/></radialGradient><filter id='f1' width='200%' height='200%'><feOffset in='SourceGraphic' result='r' dx='0' dy='30' /><feGaussianBlur in='r' result='rb' stdDeviation='4'/><feMerge><feMergeNode in='rb' /><feMergeNode in='SourceGraphic' /></feMerge></filter><symbol id='p' viewBox='0 0 500 500'><path fill='url(#g0)' d='M250 250 q -21 -25 -20 -30 -16 -29 -26 -30 15 45 -14 47 -39 -48 -25 -31 -38 -22 43 48 -13 -21 -39 -34 -44 -20 31 21 -41 42 24 24 45 -41 -31 -21 -14 -11 -43 -27 -22 -19 -17 -45 49 18 -25 34 -46 25 -13 42 22 41 -33 -20 -44 18 -40 14 -13 -11 -15 46 -23 33 -17 32 -23 -30 -38 -30 -17 -37 -14 18 -22 35 -41 33 36 21 -40 -24 32 -31 35 -10 -23 34 -42 -44 -12 27 -32 41 -36 -11 34 -49 -23 35 10 -30 27 24 39 16 -22 -29 -43 -12 -20 -42 24 42 -30 30 -20 47 -26 35 -36 27 -23 27 13 18 12 20 -37 -47 -48 -49 15 -36 -15 -10 -27 37 36 -49 20 24 -23 -29 -42 -14 -46 30 39 -28 -25 11 31 36 -20 -14 -23 32 -36 45 -42 -20 -47 13 -46 -35 -47 -39 22 -30 49 34 -45 -33 -38 22 -27 -22 -48 48 12 -48 21 47 -26 23 30 29 -27 -10 -31 -25 -33 -40 18 35 29 27 -11 15 34 10 -34 -33 -36 27 40 -30 22 30 -46 -49'/><path fill='url(#g1)' d='M250 250 q 10 -31 -19 15 -33 -46 31 -46 -42 -11 31 -31 42 46 -28 11 -43 33 39 46 12 -28 -18 41 -32 14 30 47 13 -37 32 26 42 -14 43 -18 -14 30 -31 -20 -48 -47 -42 45 -30 37 32 -19 37 12 -31 -10 -49 -27 -22 -25 -17 -22 18 -39 -39 25 10 47 -24 11 19 -38 47 49 15 48 32 45 -44 -13 -31 49 31 29 -34 -45 31 -37 -40 -32 40 40 35 -29 -10 -25 45 13 -21 -35 -15 13 -19 -12 -23 21 -36 48 -37 -40 36 -13 -17 -27 -32 -36 30 -33 -48 -10 -30 34 12 33 -29 40 -18 -14 48 16 -25 -44 -35 -16 18 -36 -38 16 -27 -31 -47 -24 22 40 -33 34 -43 -44 -33 17 38 20 -35 -18 33 -16 47 26 21 47 -10 -47 21 -44 -36 -32 -31 -33 -31 17 -43 10 -39 -18 12 27 -27 -21 21 -22 38 13 14 -24 27 15 41 17 -26 -45 -38 -18 41 43 -44 -40 36 -39 32 32 -33 34 -48 -34 40 -20 10 46 33 -44 25 -24 -44 -16 -12 -16 -26 -32 -45 18 40 -33 35 -43 -47 -25 37 12 -13 -47 -41 -29 -18 -40 -41 -26 -49 24 -46 -14 -15 27 35 24 35 -31 -17 -15 -41 -39 -22 -45 -47 -44 -48 12 -12 -15 -10 -18 -41 44 -49 24 28 16 11 -28 -22 44 -23 -25 -24 -27 -17 -33 28 -21 34 -35 23 -23 19 44 -37 -18'/><path fill='url(#g2)' d='M250 250 t 37 -44 40 49 11 28 -48 -31 -15 -29 -31 32 30 39 -46 40 46 -33 -38 -46 -47 29 -33 11 10 28 14 42 49 11 -17 12 -46 25 35 12 21 16 -49 14 26 41 -21 29 -16 21 45 17 23 42 -21 -47 -16 25 36 -37 -13 39 28 43 24 11 -20 13 29 22 -41 14 48 29 -33 -26 -31 -19 46 49 20 27 34 -12 10 23 11 -21 -28 -24 36 32 -28 -28 -33 -40 13 -33 23 -30 -41 47 -35 32 31 41 49 39 -29 -40 43 38 16 -23 29 -39 -34 34 38 -12 27 21 23 42 -27 47 36 14 49 23 -41 24 41 30 36 -20 19 -47 24 20 -46 39 -34 18 17 -36 -49 10 32 11 -21 21 -22 30 43 -41 -12 25 -26 -40 43 12 31 48 27 12 -17 -47 45 -37 31 -24 -43 -29 -36 26 -17 17 -43 20 -19 -23 20 47 24 45 17 -12 37 -48 -13 46 26 -48 39 -37 45 45 -40 -13 34 43 -12 12 16 20 -39 -11 -42 27 48 27 29 -15 18 19 -34 47 -20 18 -30 16 -39 -32 16 35 -33 12 15 19'/><path fill='url(#g3)' d='M250 250 q -58 109 124 96 -56 184 -70 179 -119 -165 -67 -197 -176 -82 184 -141 190 120 -13 -151 -191 152 -167 -70 -162 -145 -182 -22 40 63 -71 103 -11 126 -150 -58 -181 86 -189 61 186 -142 -75 25 -142 40 -149 -172 -113 126 -118 -55 -76 115 158 -195 -88 -180 152 -189 -130 73 -130 179 -159 -114 -149 120 -138 -168 37 79 -18 180 -78 190 -142 141 -28 -69 -12 154 33 -26 -123 -84 -12 -33 -115 -54 121 98 -107 -130 -40 -42 -17 -124 108 -17 74 69 13 117 43 -111 69 -83 -10 -168 -115 -122 -14 -102 144 -156 -123 75 -148 -108 -116 61 96 110 19 57 37 -176 -143 -140 -83 -152 110 -128 -89 23 -123 48 -72 120 -124 131 36 162 -22 12 119 -16 -132 159 -195 -142 39 44 -154 -26 167 165 -55 -161 -162 -65 -74 33 -40 -178 152 64 -118 -175 -32 59 186 187 167 -50 -159 103 -102 -100 -59 -53 -139 -125 -197 105 66 63'/><path fill='url(#g4)' d='M250 250 q 42 49 -25 23 -22 -11 -23 -18 -32 21 27 -23 49 45 -27 11 -12 -47 41 42 29 -26 -32 34 25 35 -23 -45 27 16 16 -26 -28 25 11 -26 26 18 28 -47 32 20 -23 16 49 -15 -41 43 -16 20 12 -11 38 46 32 37 14 -39 10 32 38 39 23 -39 36 -45 39 11 -38 21 33 -35 26 41 -42 36 33 42 39 -47 45 -44 31 35 42 30 35 17 42 33 -40 12 -11 17 -21 -33 -39 -40 -36 12 -45 34 49 -33 -14 -24 28 -41 -42 13 -43 13 -11 -37 -19 19 28 36 -14 11 -15 23 11 44 -25 -31 -17 -40 39 19 16 -43 -44 -11 -28 49 -16 -46 18 43 32 -11 44 -40 -36 16 -33 -37 41 -21 44 22 -13 18 -32 -49 34 -30 -14 -13 -38 -35 19 46 38 36 -17 -13 20 -18 44 -41 -45 -32 21 37 43 34 -11 34 -46 -28 37 -47 -28 -34 11 11 -36 -42 -31 45 32 -39 -48 -38 -15 10 39 33 10 -21 25 26 16 -27 -24 -28 -45 -47 -26 -34 -22 -42 13 40 47 -12 44 -37 -21 30 10 -29 -48 23 -23 24 18 36 42 27 25 21 35 16 15 -44 -49 -13 -13 38 -10 -31 -26 -31 27 27 12 23 47 -30 -22 -16 -45 27 -36 35 -16 10 28 39 44 32 48 -40 10 26 16 -22 12 -46 47 34 -39 32 -31 38 -25 24'/><path fill='url(#g5)' d='M250 250 t 70 -196 84 -56 171 80 -17 -90 -44 -188 -96 -39 81 77 104 -43 198 -161 80 -153 -32 46 -12 52 131 127 128 154 -13 175 50 -25 -62 -131 -169 -45 82 -139 -83 -157 49 -13 32 -182 -122 -163 181 -70 47 -38 -14 123 -189 -62 -49 40 -115 199 102 28 -198 75 -85 34 113 124 53 -132 -110 -112 126 122 12 46 -122 155 21 -33 -29 -167 83 -127 150 -107 -124 -73 79 137 16 -81 78 -74 -194 -55 -127 39 118 124 -117 69 199 45 24 -29 -102 -20 -191 195 -72 94 -144 -126 -105 -169 113 -68 -80 -135 -175 -136 -187 -172 31 -54 -175 164 -69 -43 104 -196 42 129 151 -181 -50 -101 188 -163 -51 -46 -47 192 -176 -180 -182 141 -72 -139 88 -156 19 147 -14 63 -54 -156 127 18 -57 -154 -158 159 -18 -96 130 199 149 147 -110 -14 95 -64 -156 -92 151 -33 174 193 -113 -131 -42 -96 -172 -105 -127 -121 -36 -70 197 147'/></symbol><g fill='#3a111c'><rect width='500' height='500' /><use href='#p'/></g></svg>")
 
 if __name__ == "__main__":
     print("Starting NFT Minting Agent...")
