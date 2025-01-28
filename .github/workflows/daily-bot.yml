@@ -15,12 +15,12 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libcairo2-dev pkg-config python3-dev
+        sudo apt-get install -y libmagickwand-dev imagemagick
         
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.11'
         
     - name: Install Poetry
       run: |
