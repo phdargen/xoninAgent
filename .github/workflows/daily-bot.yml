@@ -42,6 +42,7 @@ jobs:
       working-directory: ./cdp-langchain/examples/chatbot-python
       env:
         NETWORK_ID: ${{ secrets.NETWORK_ID }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
         TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
         TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
