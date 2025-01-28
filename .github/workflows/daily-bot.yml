@@ -43,6 +43,15 @@ jobs:
       with:
         name: mention_memory
         path: ./cdp-langchain/examples/chatbot-python/mention_memory.txt
+      continue-on-error: true
+
+    - name: Ensure mention_memory.txt exists
+      working-directory: ./cdp-langchain/examples/chatbot-python
+      run: |
+            if [ ! -f mention_memory.txt ]; then
+              echo "Creating an empty mention_memory.txt file"
+              echo "" > mention_memory.txt
+            fi
 
     - name: Run bot
       working-directory: ./cdp-langchain/examples/chatbot-python
