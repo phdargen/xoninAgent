@@ -3,6 +3,8 @@ import sys
 import time
 import re
 import json
+import random
+
 from eth_utils import is_address
 from datetime import datetime, timezone
 import requests
@@ -24,10 +26,8 @@ from cdp import Wallet
 from cdp.smart_contract import SmartContract
 from cdp.address import Address
 from cdp.address_reputation import AddressReputation
-import tweepy
 
-import cairosvg
-import random
+from wand.image import Image
 
 # Settings
 # ---------
@@ -210,44 +210,6 @@ def get_transaction_data(tx_hash, max_retries=2, delay=15):
 
     return None, None, False  
 
-# Helper functions
-# ---------
-
-# def save_svg_to_png(contract_address, token_id, svg_content) -> str:
-#     """
-#     Saves the given SVG content as a PNG file.
-
-#     Parameters:
-#         file_number (int): The identifier number for the file name.
-#         svg_content (str): The SVG content as a string.
-#     """
-#     try:
-#         file_name = f"output_{contract_address}_{token_id}.png"
-        
-#         # Ensure SVG content is properly formatted
-#         if not svg_content.strip().startswith('<svg'):
-#             print("Invalid SVG content")
-#             return None
-
-#         # Save svg to file
-#         print(f"svg_content: {svg_content}")
-#         with open(f"output_{contract_address}_{token_id}.svg", "w") as f:
-#             f.write(svg_content)
-
-#         # Convert with error handling
-#         cairosvg.svg2png(
-#             url=f"output_{contract_address}_{token_id}.svg",
-#             write_to=file_name
-#         )
-        
-#         print(f"SVG saved as PNG: {file_name}")
-#         return file_name
-#     except Exception as e:
-#         print(f"Error saving SVG to PNG: {e}")
-#         return None
-
-from wand.image import Image
-
 def save_svg_to_png(contract_address, token_id, svg_content) -> str:
     """
     Saves the given SVG content as a PNG file using ImageMagick via wand.
@@ -270,7 +232,7 @@ def save_svg_to_png(contract_address, token_id, svg_content) -> str:
         with open(svg_file, "w") as f:
             f.write(svg_content)
         
-        # Convert SVG to PNG using wand (ImageMagick)
+        # Convert SVG to PNG 
         with Image(filename=svg_file, format='svg') as img:
             img.format = 'png'
             img.save(filename=file_name)
@@ -350,7 +312,6 @@ def mint_myNft(wallet: Wallet, recipient_address: str) -> str:
     except Exception as e:
         return f"Error minting and transferring NFT: {e!s}"
 
-
 # Twitter functions
 # ---------
 
@@ -425,7 +386,6 @@ def get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id
     
     return []
 
-
 def is_valid_mint_request_with_feedback(tweet_text):
     """Check if tweet contains mint request and provide feedback."""
     # Case insensitive search for 'mint' and 'to' followed by an address
@@ -442,15 +402,26 @@ def is_valid_mint_request_with_feedback(tweet_text):
 
 def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_address, twitter_wrapper, author=None, reputation: AddressReputation=None):
     """Process an NFT mint request."""
-
     # Mint NFT
     print(f"Starting mint process for {eth_address}...")
     mint_result = mint_myNft(wallet, eth_address)
     print(f"Mint response: {mint_result}")
-                    
-    # Extract transaction hash from the result
-    txHash = mint_result.split("Transaction hash: ")[1].strip()
-    txLink = mint_result.split("Transaction: ")[1].strip()
+    
+    # Extract transaction hash and link from the result
+    txHash = re.search(r'Transaction hash: (0x[a-fA-F0-9]+)', mint_result)
+    if not txHash:
+        raise ValueError("Could not find transaction hash in mint response")
+    txHash = txHash.group(1)
+    
+    txLink = re.search(r'Transaction: (https://[^\s\n]+)', mint_result)
+    if not txLink:
+        # Construct link if not found
+        base_url = "https://basescan.org/tx/" if network_id == "base-mainnet" else "https://sepolia.basescan.org/tx/"
+        txLink = base_url + txHash
+    else:
+        txLink = txLink.group(1)    
+    print(f"Transaction hash: {txHash}")
+    print(f"Transaction link: {txLink}")
 
     # Get transaction info
     token_id, contract_address, success = get_transaction_data(txHash)
@@ -512,7 +483,7 @@ def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_a
         if positive_metrics:
             key, value = random.choice(list(positive_metrics.items()))
             print(f"Selected metric: {value} {key}")
-            metric_msg = f"You may also use the following information to praise the user: {positive_metrics[key]} {key}."
+            metric_msg = f"You may also use the following info to praise the user: {positive_metrics[key]} {key}."
 
     # Post reply with media
     greeting = f"@{author}! " if author else ""
@@ -523,6 +494,7 @@ def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_a
         f"Be creative in conveying this message! For context, the score is between -100 (risky) and +100 (crypto-forward)."
         f"{metric_msg}"
     )
+    print(f"Reply prompt: {reply_prompt}")
 
     print("Sending reply tweet...")
     for chunk in agent_executor.stream(
@@ -533,7 +505,6 @@ def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_a
             print(f"Reply response: {response}")
 
     return True, txHash, eth_address  
-
 
 def send_error_reply(agent_executor, config, tweet_id, error_type, address=None, author=None, reputation: AddressReputation=None):
     """Send error reply tweet and return reply ID if successful."""
