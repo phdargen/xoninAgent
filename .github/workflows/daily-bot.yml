@@ -39,7 +39,7 @@ jobs:
         WALLET_SECRET: ${{ secrets.WALLET_SECRET }}
 
     - name: Download mention_memory artifact
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: mention_memory
         path: ./cdp-langchain/examples/chatbot-python/mention_memory.txt
@@ -70,7 +70,7 @@ jobs:
         poetry run python chatbot.py
 
     - name: Upload mention_memory artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
           name: mention_memory
           path: ./cdp-langchain/examples/chatbot-python/mention_memory.txt   

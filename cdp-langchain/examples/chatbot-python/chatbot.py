@@ -482,15 +482,15 @@ def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_a
         if positive_metrics:
             key, value = random.choice(list(positive_metrics.items()))
             print(f"Selected metric: {value} {key}")
-            metric_msg = f"You may also use the following info to praise the user: {positive_metrics[key]} {key}."
+            metric_msg = f" You may also use this info to praise the user: {positive_metrics[key]} {key}."
 
     # Post reply with media
     greeting = f"@{author}! " if author else ""
     media_id_message = f"and attach the media ID: {media_id} " if media_id else ""
     reply_prompt = (
         f"Use post_tweet_reply {media_id_message} to reply to tweet {tweet_id} with a personalized message about the successful mint such as:\n"
-        f"'Fuiyoh {greeting}, your onchain reputation score is {reputation.score}! That's so based! I minted {name} for you! Have fun with your fully onchain art on @base! Visit https://xonin.vercel.app/ to learn more about the project! Here's the transaction link: {txLink}.'"
-        f"Be creative in conveying this message! For context, the score is between -100 (risky) and +100 (crypto-forward)."
+        f"'Fuiyoh {greeting}, your onchain reputation score is {reputation.score}! That's so based! I minted {name} for you! Visit https://xonin.vercel.app/ to learn more about the project! Have fun with your fully onchain art on @base: {txLink}.'"
+        f" Be creative in conveying this message but stay below 280 characters!"
         f"{metric_msg}"
     )
     print(f"Reply prompt: {reply_prompt}")
@@ -525,7 +525,7 @@ def send_error_reply(agent_executor, config, tweet_id, error_type, address=None,
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
             f"'{greeting}You have already minted an NFT. "
-            "This is limited to one NFT per user, don't be greedy! You can mint another one yourself at https://xonin.vercel.app/.' Be creative in conveying this message!"
+            "This is limited to 1 NFT per user, don't be greedy! You can mint another one yourself at https://xonin.vercel.app/.' Be creative in conveying this message!"
         )
     elif error_type == "low_reputation":
         metric_msg = ""
@@ -554,7 +554,7 @@ def send_error_reply(agent_executor, config, tweet_id, error_type, address=None,
             if metrics:
                 key, value = random.choice(list(metrics.items()))
                 print(f"Selected metric: {value} {key}")
-                metric_msg = f"You may also use the following information to praise the user: {value} {key}."
+                metric_msg = f"You may also use this info to suggest the user to improve the score: {value} {key}."
 
         print(f"Metric message: {metric_msg}")
 
@@ -562,7 +562,7 @@ def send_error_reply(agent_executor, config, tweet_id, error_type, address=None,
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
             f"'Haiyaa @{author}, your onchain reputation score is only {reputation.score}. Why so low?"
             f"Sorry, no free NFT for you. You can always mint your own at https://xonin.vercel.app/.'"
-            f"Be creative in conveying this message! For context, the score is between -100 (risky) and +100 (crypto-forward)."
+            f"Be creative in conveying this message but stay below 280 characters! "
             f"{metric_msg}."
         )
 
