@@ -38,6 +38,12 @@ jobs:
       env:
         WALLET_SECRET: ${{ secrets.WALLET_SECRET }}
 
+    - name: Download mention_memory artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: mention_memory
+        path: ./cdp-langchain/examples/chatbot-python/mention_memory.txt
+
     - name: Run bot
       working-directory: ./cdp-langchain/examples/chatbot-python
       env:
@@ -53,3 +59,9 @@ jobs:
         TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
       run: |
         poetry run python chatbot.py
+
+    - name: Upload mention_memory artifact
+      uses: actions/upload-artifact@v3
+      with:
+          name: mention_memory
+          path: ./cdp-langchain/examples/chatbot-python/mention_memory.txt   
