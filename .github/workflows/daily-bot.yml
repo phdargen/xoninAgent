@@ -20,9 +20,9 @@ jobs:
             libx11-dev libxext-dev zlib1g-dev libpng-dev libjpeg-dev \
             libtiff-dev libgif-dev libwebp-dev libxml2-dev libfreetype6-dev \
             ghostscript
-        wget https://imagemagick.org/archive/releases/ImageMagick-7.1.1-18.tar.gz
-        tar xvzf ImageMagick-7.1.1-18.tar.gz
-        cd ImageMagick-7.1.1-18
+        wget https://imagemagick.org/archive/releases/ImageMagick-7.1.1-43.tar.gz
+        tar xvzf ImageMagick-7.1.1-43.tar.gz
+        cd ImageMagick-7.1.1-43
         ./configure
         make -j$(nproc)
         sudo make install
