@@ -15,25 +15,8 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get remove -y imagemagick imagemagick-6.q16  # Remove older versions
-        sudo apt-get install -y build-essential checkinstall pkg-config \
-            libx11-dev libxext-dev zlib1g-dev libpng-dev libjpeg-dev \
-            libtiff-dev libgif-dev libwebp-dev libxml2-dev libfreetype6-dev \
-            ghostscript
-        wget https://imagemagick.org/archive/releases/ImageMagick-7.1.1-43.tar.gz
-        tar xvzf ImageMagick-7.1.1-43.tar.gz
-        cd ImageMagick-7.1.1-43
-        ./configure
-        make -j$(nproc)
-        sudo make install
-        sudo ldconfig /usr/local/lib
-        echo "Verifying ImageMagick installation..."
-        which magick
-        magick --version
-
-    - name: Modify ImageMagick Policy to Enable SVG Processing
-      run: |
-        sudo sed -i 's/<policy domain="coder" rights="none" pattern="SVG" \/>/<policy domain="coder" rights="read | write" pattern="SVG" \/>/g' /etc/ImageMagick-6/policy.xml
+        sudo apt-get install -y inkscape
+        sudo apt-get install -y libmagickwand-dev imagemagick 
 
     - name: Set up Python
       uses: actions/setup-python@v4
