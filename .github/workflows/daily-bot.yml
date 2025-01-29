@@ -15,11 +15,18 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get remove -y imagemagick imagemagick-6.q16  
-        sudo apt-get install -y software-properties-common
-        sudo add-apt-repository -y ppa:ubuntuhandbook1/imagick
-        sudo apt-get update
-        sudo apt-get install -y imagemagick libmagickwand-dev ghostscript
+        sudo apt-get remove -y imagemagick imagemagick-6.q16  # Remove older versions
+        sudo apt-get install -y build-essential checkinstall pkg-config \
+            libx11-dev libxext-dev zlib1g-dev libpng-dev libjpeg-dev \
+            libtiff-dev libgif-dev libwebp-dev libxml2-dev libfreetype6-dev \
+            ghostscript
+        wget https://imagemagick.org/archive/releases/ImageMagick-7.1.1-18.tar.gz
+        tar xvzf ImageMagick-7.1.1-18.tar.gz
+        cd ImageMagick-7.1.1-18
+        ./configure
+        make -j$(nproc)
+        sudo make install
+        sudo ldconfig /usr/local/lib
         echo "Verifying ImageMagick installation..."
         which magick
         magick --version
