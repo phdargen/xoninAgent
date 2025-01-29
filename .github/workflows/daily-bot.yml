@@ -15,8 +15,12 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libmagickwand-dev imagemagick
-        
+        sudo apt-get install -y libmagickwand-dev imagemagick libgs9-common ghostscript librsvg2-bin
+
+    - name: Modify ImageMagick Policy to Enable SVG Processing
+      run: |
+        sudo sed -i 's/<policy domain="coder" rights="none" pattern="SVG" \/>/<policy domain="coder" rights="read | write" pattern="SVG" \/>/g' /etc/ImageMagick-6/policy.xml
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -81,6 +85,8 @@ jobs:
       with:
           name: mention_memory
           path: ./cdp-langchain/examples/chatbot-python/mention_memory.txt   
+          overwrite: true
+
     
     - name: Upload SVG files
       uses: actions/upload-artifact@v4
