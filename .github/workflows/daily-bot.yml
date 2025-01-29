@@ -16,6 +16,16 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libmagickwand-dev imagemagick ghostscript
+        echo "Verifying ImageMagick installation..."
+        which magick || which convert
+        magick --version || convert --version
+        echo "Setting PATH and LIBRARY PATH..."
+        export PATH="/usr/bin:$PATH"
+        export MAGICK_HOME="/usr"
+        export LD_LIBRARY_PATH="$MAGICK_HOME/lib:$LD_LIBRARY_PATH"
+        export PKG_CONFIG_PATH="$MAGICK_HOME/lib/pkgconfig:$PKG_CONFIG_PATH"
+        echo "PATH=$PATH"
+        echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 
     - name: Modify ImageMagick Policy to Enable SVG Processing
       run: |
