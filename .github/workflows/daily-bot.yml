@@ -42,8 +42,15 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: mention_memory
-        path: ./cdp-langchain/examples/chatbot-python/mention_memory.txt
+        path: ./cdp-langchain/examples/chatbot-python/mention_memory
       continue-on-error: true
+
+    - name: Move mention_memory.txt to correct location
+      working-directory: ./cdp-langchain/examples/chatbot-python
+      run: |
+        if [ -f mention_memory/mention_memory.txt ]; then
+          mv mention_memory/mention_memory.txt ./mention_memory.txt
+        fi
 
     - name: Ensure mention_memory.txt exists
       working-directory: ./cdp-langchain/examples/chatbot-python
@@ -74,3 +81,17 @@ jobs:
       with:
           name: mention_memory
           path: ./cdp-langchain/examples/chatbot-python/mention_memory.txt   
+    
+    - name: Upload SVG files
+      uses: actions/upload-artifact@v4
+      with:
+        name: generated-svgs
+        path: ./cdp-langchain/examples/chatbot-python/*.svg
+        if-no-files-found: ignore  
+
+    - name: Upload PNG files
+      uses: actions/upload-artifact@v4
+      with:
+        name: generated-pngs
+        path: ./cdp-langchain/examples/chatbot-python/*.png
+        if-no-files-found: ignore    
