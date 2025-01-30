@@ -67,21 +67,17 @@ jobs:
       
     - name: Download Latest mention_memory Artifact
       run: |
+              if [[ -z "$ARTIFACT_ID" ]]; then
+                echo "❌ No artifact ID found. Skipping download."
+                exit 0
+              fi              
               echo "Downloading artifact ID $ARTIFACT_ID..."
               curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                 -o mention_memory.zip \
                 "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip"
       
               unzip mention_memory.zip -d mention_memory
-              ls -l mention_memory  # Debugging: List downloaded files
-      
-    - name: Move mention_memory.txt to Correct Location
-      run: |
-              mv mention_memory/mention_memory.txt ./cdp-langchain/examples/chatbot-python/mention_memory.txt
-             
-    - name: Verify Artifact Content
-      run: |
-            cat ./cdp-langchain/examples/chatbot-python/mention_memory.txt || echo "File is empty"              
+              ls -l mention_memory  
 
     - name: Ensure mention_memory.txt exists
       working-directory: ./cdp-langchain/examples/chatbot-python
@@ -89,6 +85,9 @@ jobs:
             if [ ! -f mention_memory.txt ]; then
               echo "Creating an empty mention_memory.txt file"
               echo "" > mention_memory.txt
+            fi
+            else
+              echo "mention_memory.txt already exists"
             fi
 
     - name: Run bot
