@@ -78,6 +78,8 @@ jobs:
       
               unzip mention_memory.zip -d mention_memory
               ls -l mention_memory  
+              cat mention_memory/mention_memory.txt
+              mv mention_memory/mention_memory.txt ./cdp-langchain/examples/chatbot-python/mention_memory.txt
 
     - name: Ensure mention_memory.txt exists
       working-directory: ./cdp-langchain/examples/chatbot-python
