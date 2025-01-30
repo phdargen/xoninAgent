@@ -15,8 +15,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y inkscape librsvg2-bin
-        sudo apt-get install -y libmagickwand-dev imagemagick 
+        sudo apt-get install -y librsvg2-bin inkscape
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -43,7 +42,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: mention_memory
-        path: ./cdp-langchain/examples/chatbot-python/mention_memory
+        path: ./cdp-langchain/examples/chatbot-python/
       continue-on-error: true
 
     - name: Move mention_memory.txt to correct location

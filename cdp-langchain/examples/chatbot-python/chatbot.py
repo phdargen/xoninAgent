@@ -27,7 +27,6 @@ from cdp.smart_contract import SmartContract
 from cdp.address import Address
 from cdp.address_reputation import AddressReputation
 
-from wand.image import Image
 import subprocess
 
 # Settings
@@ -212,7 +211,7 @@ def get_transaction_data(tx_hash, max_retries=4, delay=25):
 
 def save_svg_to_png(contract_address, token_id, svg_content) -> str:
     """
-    Saves the given SVG content as a PNG file using ImageMagick via wand.
+    Saves the given SVG content as a PNG file using rsvg-convert or inkscape as fallback.
 
     Parameters:
         contract_address (str): The contract address for the file name.
@@ -232,24 +231,22 @@ def save_svg_to_png(contract_address, token_id, svg_content) -> str:
         with open(svg_file, "w") as f:
             f.write(svg_content)
 
-        # Debug: Print ImageMagick version
+        # Try rsvg-convert first
         try:
-            magick_version = subprocess.check_output(["magick", "--version"]).decode("utf-8")
-            print("ImageMagick Version:", magick_version)
-        except Exception as e:
-            print("Error checking ImageMagick version:", e)
-        
-        # Convert SVG to PNG 
-        with Image(filename=svg_file, format='svg') as img:
-            img.format = 'png'
-            img.save(filename=file_name)
+            subprocess.run(["rsvg-convert", "-o", file_name, svg_file], check=True)
+            print(f"Converted SVG to PNG using rsvg-convert: {file_name}")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # If rsvg-convert fails, try inkscape
+            try:
+                subprocess.run(["inkscape", "-o", file_name, svg_file], check=True)
+                print(f"Converted SVG to PNG using Inkscape: {file_name}")
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                print(f"Both rsvg-convert and Inkscape failed: {e}")
+                return None
+
         print(f"SVG saved as PNG: {file_name}")
-
-        subprocess.run(["rsvg-convert", "-o", "rsvg-convert.png", svg_file], check=True)
-        subprocess.run(["inkscape", "-o", "inkscape.png", svg_file], check=True)
-
-
         return file_name
+    
     except Exception as e:
         print(f"Error saving SVG to PNG: {e}")
         return None

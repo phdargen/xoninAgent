@@ -13,7 +13,6 @@ twitter-langchain = { path = "../../../twitter-langchain/python", develop = true
 eth-utils = ">=5.0.0"
 cdp-agentkit-core = { path = "../../../cdp-agentkit-core/python", develop = true }
 requests = "^2.31.0"
-wand = "^0.6.13"
 
 [build-system]
 requires = ["poetry-core"]

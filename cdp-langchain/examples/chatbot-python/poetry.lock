@@ -3411,23 +3411,6 @@ socks = ["pysocks (>=1.5.6,!=1.5.7,<2.0)"]
 zstd = ["zstandard (>=0.18.0)"]
 
 [[package]]
-name = "wand"
-version = "0.6.13"
-description = "Ctypes-based simple MagickWand API binding for Python"
-optional = false
-python-versions = "*"
-groups = ["main"]
-markers = "python_version == \"3.11\" or python_version >= \"3.12\""
-files = [
-    {file = "Wand-0.6.13-py2.py3-none-any.whl", hash = "sha256:e5dda0ac2204a40c29ef5c4cb310770c95d3d05c37b1379e69c94ea79d7d19c0"},
-    {file = "Wand-0.6.13.tar.gz", hash = "sha256:f5013484eaf7a20eb22d1821aaefe60b50cc329722372b5f8565d46d4aaafcca"},
-]
-
-[package.extras]
-doc = ["Sphinx (>=5.3.0)"]
-test = ["pytest (>=7.2.0)"]
-
-[[package]]
 name = "web3"
 version = "7.7.0"
 description = "web3: A Python library for interacting with Ethereum"
@@ -3660,4 +3643,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "5ad2014466806944a9e810a696af0ce79ac17beda4958846a84a2dd3d87bb1f2"
+content-hash = "6bfea38415477065e667a4fa8dc25ee8fac4cda8134dffa55383a23672287319"
