@@ -15,7 +15,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y inkscape
+        sudo apt-get install -y inkscape librsvg2-bin
         sudo apt-get install -y libmagickwand-dev imagemagick 
 
     - name: Set up Python
