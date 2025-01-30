@@ -85,7 +85,6 @@ jobs:
             if [ ! -f mention_memory.txt ]; then
               echo "Creating an empty mention_memory.txt file"
               echo "" > mention_memory.txt
-            fi
             else
               echo "mention_memory.txt already exists"
             fi
