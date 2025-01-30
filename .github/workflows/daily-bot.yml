@@ -38,6 +38,15 @@ jobs:
       env:
         WALLET_SECRET: ${{ secrets.WALLET_SECRET }}
 
+    - name: Debug Artifact API Response
+      run: |
+          echo "Fetching all artifacts..."
+          curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts" > artifacts.json
+  
+          echo "API Response:"
+          cat artifacts.json
+  
     - name: Get Artifact ID from Previous Run
       run: |
             echo "Fetching latest artifact ID..."
@@ -52,23 +61,38 @@ jobs:
             echo "Latest Artifact ID: $ARTIFACT_ID"
             echo "ARTIFACT_ID=$ARTIFACT_ID" >> $GITHUB_ENV
 
-    - name: Download Artifact from Previous Run
+            - name: Get Latest Artifact ID for mention_memory
+            run: |
+              echo "Fetching latest artifact ID for mention_memory..."
+              ARTIFACT_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/artifacts" | \
+                jq -r '.artifacts | sort_by(.created_at) | reverse | .[] | select(.name=="mention_memory") | .id' | head -n 1)
+      
+              if [[ -z "$ARTIFACT_ID" ]]; then
+                echo "No artifact found!"
+                exit 1
+              fi
+      
+              echo "Latest mention_memory Artifact ID: $ARTIFACT_ID"
+              echo "ARTIFACT_ID=$ARTIFACT_ID" >> $GITHUB_ENV
+      
+    - name: Download Latest mention_memory Artifact
       run: |
-        echo "Downloading artifact ID $ARTIFACT_ID..."
-        curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          -o mention_memory.zip \
-          "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip"
-
-        unzip mention_memory.zip -d mention_memory
-        ls -l mention_memory  # Debugging: List downloaded files
-
-    - name: Move Artifact to Correct Location
+              echo "Downloading artifact ID $ARTIFACT_ID..."
+              curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                -o mention_memory.zip \
+                "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip"
+      
+              unzip mention_memory.zip -d mention_memory
+              ls -l mention_memory  # Debugging: List downloaded files
+      
+    - name: Move mention_memory.txt to Correct Location
       run: |
-        mv mention_memory/mention_memory.txt ./cdp-langchain/examples/chatbot-python/mention_memory.txt
-
+              mv mention_memory/mention_memory.txt ./cdp-langchain/examples/chatbot-python/mention_memory.txt
+             
     - name: Verify Artifact Content
       run: |
-        cat ./cdp-langchain/examples/chatbot-python/mention_memory.txt || echo "File is empty"
+            cat ./cdp-langchain/examples/chatbot-python/mention_memory.txt || echo "File is empty"              
 
     - name: Ensure mention_memory.txt exists
       working-directory: ./cdp-langchain/examples/chatbot-python
