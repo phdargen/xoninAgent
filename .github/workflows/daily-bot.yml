@@ -38,19 +38,37 @@ jobs:
       env:
         WALLET_SECRET: ${{ secrets.WALLET_SECRET }}
 
-    - name: Download mention_memory artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: mention_memory
-        path: ./cdp-langchain/examples/chatbot-python/
-      continue-on-error: true
-
-    - name: Move mention_memory.txt to correct location
-      working-directory: ./cdp-langchain/examples/chatbot-python
+    - name: Get Artifact ID from Previous Run
       run: |
-        if [ -f mention_memory/mention_memory.txt ]; then
-          mv mention_memory/mention_memory.txt ./mention_memory.txt
-        fi
+            echo "Fetching latest artifact ID..."
+            ARTIFACT_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/artifacts" | \
+              jq -r '.artifacts[] | select(.name=="mention_memory") | .id' | head -n 1)
+            
+            if [[ -z "$ARTIFACT_ID" ]]; then
+              echo "No artifact found!"
+              exit 1
+            fi
+            echo "Latest Artifact ID: $ARTIFACT_ID"
+            echo "ARTIFACT_ID=$ARTIFACT_ID" >> $GITHUB_ENV
+
+    - name: Download Artifact from Previous Run
+      run: |
+        echo "Downloading artifact ID $ARTIFACT_ID..."
+        curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -o mention_memory.zip \
+          "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip"
+
+        unzip mention_memory.zip -d mention_memory
+        ls -l mention_memory  # Debugging: List downloaded files
+
+    - name: Move Artifact to Correct Location
+      run: |
+        mv mention_memory/mention_memory.txt ./cdp-langchain/examples/chatbot-python/mention_memory.txt
+
+    - name: Verify Artifact Content
+      run: |
+        cat ./cdp-langchain/examples/chatbot-python/mention_memory.txt || echo "File is empty"
 
     - name: Ensure mention_memory.txt exists
       working-directory: ./cdp-langchain/examples/chatbot-python
@@ -83,7 +101,6 @@ jobs:
           path: ./cdp-langchain/examples/chatbot-python/mention_memory.txt   
           overwrite: true
 
-    
     - name: Upload SVG files
       uses: actions/upload-artifact@v4
       with:
