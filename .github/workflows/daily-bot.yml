@@ -49,23 +49,9 @@ jobs:
   
           echo "API Response:"
           cat artifacts.json
-  
-    - name: Get Artifact ID from Previous Run
-      run: |
-            echo "Fetching latest artifact ID..."
-            ARTIFACT_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/artifacts" | \
-              jq -r '.artifacts[] | select(.name=="mention_memory") | .id' | head -n 1)
-            
-            if [[ -z "$ARTIFACT_ID" ]]; then
-              echo "No artifact found!"
-              exit 1
-            fi
-            echo "Latest Artifact ID: $ARTIFACT_ID"
-            echo "ARTIFACT_ID=$ARTIFACT_ID" >> $GITHUB_ENV
 
-            - name: Get Latest Artifact ID for mention_memory
-            run: |
+    - name: Get Latest Artifact ID for mention_memory
+      run: |
               echo "Fetching latest artifact ID for mention_memory..."
               ARTIFACT_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                 "https://api.github.com/repos/${{ github.repository }}/actions/artifacts" | \
