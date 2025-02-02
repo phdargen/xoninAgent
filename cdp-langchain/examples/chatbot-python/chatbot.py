@@ -774,6 +774,7 @@ def initialize_agent():
     print(f"Wallet: {wallet}")
     check_eth_balance(wallet, wallet.default_address.address_id)
     #score, metadata = check_reputation( wallet.default_address.address_id)
+    #private_key = wallet.default_address.export()
 
     # Initialize Twitter wrapper using the existing TwitterApiWrapper
     values = {}
