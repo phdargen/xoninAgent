@@ -27,28 +27,24 @@ from cdp.smart_contract import SmartContract
 from cdp.address import Address
 from cdp.address_reputation import AddressReputation
 
+from web3 import Web3
+
 import subprocess
 
 # Settings
 # ---------
 
-# Configure files to persist data
+# Config
+DEBUG_MODE = True
 wallet_data_file = "wallet_data.txt"
+DUMMY_MENTIONS_FILE = "dummy_mentions.txt"
+MENTION_MEMORY_FILE = "mention_memory.txt"
 
-# NFT Contract configuration
+# NFT contract 
 network_id = os.getenv('NETWORK_ID')
 NFT_CONTRACT_ADDRESS = "0x692E25F69857ceee22d5fdE61E67De1fcE7EA274" if network_id == "base-mainnet" else "0x32f75546e56aEC829ce13A9b73d4ebb42bF56b9c"
 NFT_PRICE = Decimal("0.001") if network_id == "base-mainnet" else Decimal("0.001") # in ETH
 REPUTATION_THRESHOLD = 20
-
-DEBUG_MODE = True
-DUMMY_MENTIONS_FILE = "dummy_mentions.txt"
-MENTION_MEMORY_FILE = "mention_memory.txt"
-
-etherscan_api_key = os.getenv('ETHERSCAN_API_KEY')
-if not etherscan_api_key:
-    raise ValueError("ETHERSCAN_API_KEY environment variable is not set")
-ETHERSCAN_URL = "https://api.basescan.org/api" if network_id == "base-mainnet" else "https://api-sepolia.basescan.org/api"
 
 abi = [
     {
@@ -59,6 +55,19 @@ abi = [
         "type": "function"
     }
 ]
+
+# Etherscan 
+etherscan_api_key = os.getenv('ETHERSCAN_API_KEY')
+if not etherscan_api_key:
+    raise ValueError("ETHERSCAN_API_KEY environment variable is not set")
+ETHERSCAN_URL = "https://api.basescan.org/api" if network_id == "base-mainnet" else "https://api-sepolia.basescan.org/api"
+
+# Infura
+infura_api = os.getenv('INFURA_API_KEY')
+if not infura_api:
+    raise ValueError("INFURA_API_KEY environment variable is not set")
+w3 = Web3(Web3.HTTPProvider(infura_api))
+w3.ens = w3.ens.from_web3(w3)
 
 # Helper classes
 # ---------
@@ -166,6 +175,17 @@ def check_reputation(address: str) -> AddressReputation:
             
     return reputation
 
+def resolve_ens(domain):
+    """Resolve ENS domain to address using Base L2 resolver."""
+    global w3  # Access the global w3 instance
+    try:
+        address = w3.ens.address(domain)
+        print(f"Resolved {domain} to {address}")
+        return address
+    except Exception as e:
+        print(f"Error resolving ENS domain: {e}")
+        return None
+
 def get_transaction_data(tx_hash, max_retries=4, delay=25):
     """Get transaction data from etherscan with retries."""
     url = f"{ETHERSCAN_URL}?module=proxy&action=eth_getTransactionReceipt&txhash={tx_hash}&apikey={etherscan_api_key}"
@@ -250,7 +270,6 @@ def save_svg_to_png(contract_address, token_id, svg_content) -> str:
     except Exception as e:
         print(f"Error saving SVG to PNG: {e}")
         return None
-
 
 # Mint nft functions
 # ---------
@@ -395,18 +414,37 @@ def get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id
     return []
 
 def is_valid_mint_request_with_feedback(tweet_text):
-    """Check if tweet contains mint request and provide feedback."""
-    # Case insensitive search for 'mint' and 'to' followed by an address
-    pattern = r"(?i)mint.*?to\s+(0x[a-fA-F0-9]+)"
-    match = re.search(pattern, tweet_text)
-    if not match:
-        return None, None
+    """Check if tweet contains an address or ENS domain and provide feedback."""
+    # Search for 0x address or .eth/.base.eth domain
+    patterns = [
+        r"0x[a-fA-F0-9]{40}",  # ETH address
+        r"@?(\S+\.eth)\b",     # .eth domain, optionally with @
+    ]
     
-    address = match.group(1)
-    if not is_address(address):
-        return address, "invalid_address"  # Return the invalid address for the error message
+    for pattern in patterns:
+        match = re.search(pattern, tweet_text)
+        if match:
+            # Get the address, using capture group if present (for ENS domains)
+            address = match.group(1) if '.eth' in pattern else match.group(0)
+            
+            # If it's an ENS domain, try to resolve it
+            if '.eth' in address:
+                try:
+                    resolved = resolve_ens(address)
+                    if not resolved:
+                        return address, "invalid_address"
+                    address = resolved
+                except Exception as e:
+                    print(f"Error resolving ENS domain: {e}")
+                    return address, "invalid_address"
+            
+            # Validate the address (either direct or resolved from ENS)
+            if not is_address(address):
+                return address, "invalid_address"
+                
+            return address, "valid"
     
-    return address, "valid"
+    return None, None
 
 def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_address, twitter_wrapper, author=None, reputation: AddressReputation=None):
     """Process an NFT mint request."""
@@ -788,7 +826,8 @@ def run_autonomous_mode(agent_executor, wallet: Wallet, config, tools, twitter_w
     """Run the agent autonomously with specified intervals."""
     print("Starting autonomous mode with NFT minting capability...")
     print(f"Debug mode: {DEBUG_MODE}")
-    
+    print(f"Network ID: {network_id}")
+
     account_id = '1413425385937809414'
     mention_memory = MentionMemory()
     
