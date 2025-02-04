@@ -35,10 +35,11 @@ import subprocess
 # ---------
 
 # Config
-DEBUG_MODE = False
 wallet_data_file = "wallet_data.txt"
+DEBUG_MODE = False
 DUMMY_MENTIONS_FILE = "dummy_mentions.txt"
 MENTION_MEMORY_FILE = "mention_memory.txt"
+ADMIN_ID = '1340039893595074560'
 
 # NFT contract 
 network_id = os.getenv('NETWORK_ID')
@@ -713,19 +714,20 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
         return True
 
     # Check if user or address has already minted successfully
-    previous_tweet_id = mention_memory.has_successful_mint(author_id, address)
-    if previous_tweet_id:
-        print(f"User @{author} or address {address} has already minted an NFT")
-        reply_id = send_error_reply(agent_executor, config, tweet_id, "already_minted", address, author, reputation)
-        mention_memory.add_mention(
-            tweet_id,
-            tweet_text,
-            "duplicate_request",
-            author=author,
-            author_id=author_id,
-            reply_id=reply_id
-        )
-        return True
+    if author_id is not ADMIN_ID:
+        previous_tweet_id = mention_memory.has_successful_mint(author_id, address)
+        if previous_tweet_id:
+            print(f"User @{author} or address {address} has already minted an NFT")
+            reply_id = send_error_reply(agent_executor, config, tweet_id, "already_minted", address, author, reputation)
+            mention_memory.add_mention(
+                tweet_id,
+                tweet_text,
+                "duplicate_request",
+                author=author,
+                author_id=author_id,
+                reply_id=reply_id
+            )
+            return True
        
     # Address is valid and has balance + reputation -> mint nft
     print(f"Processing mint request for address: {address}")
