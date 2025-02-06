@@ -142,8 +142,9 @@ class MentionMemory:
         """Check if author or address has already minted successfully."""
         for tweet_id, mention in self.memory["mentions"].items():
             if mention.get("mint_success"):
-                # Check both author_id and minted_address
-                if (mention.get("author_id") == author_id or 
+                # Check both author.id and minted_address
+                author = mention.get("author", {})
+                if (author.get("id") == author_id or 
                     (address and mention.get("minted_address", "").lower() == address.lower())):
                     return tweet_id
         return None
@@ -214,10 +215,6 @@ def get_transaction_data(tx_hash, max_retries=4, delay=25):
             status = int(data['result'].get('status', '0'), 16)
             if status == 0:
                 print("Transaction failed")
-                if attempt < max_retries - 1:
-                    print(f"Will retry mint in {delay} seconds...")
-                    time.sleep(delay)
-                    return None, None, False  
                 return None, None, False
 
             # Transaction successful, get logs
@@ -699,7 +696,7 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
         
     if status == "invalid_address":
         print(f"Invalid address found: {address}")
-        reply_id = send_error_reply(agent_executor, config, tweet_id, "invalid_address", address, domain, author, tagged_user)
+        reply_id = send_error_reply(agent_executor, config, tweet_id, "invalid_address", address, domain, author, None, tagged_user)
         mention_memory.add_mention(
             tweet_id, 
             tweet_text, 
@@ -716,9 +713,9 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
     balance = get_eth_balance(address)
     if balance is None:
         return False
-    if balance == 0:
+    if not balance > 0:
         print(f"Zero balance address found: {address}")
-        reply_id = send_error_reply(agent_executor, config, tweet_id, "zero_balance", address, domain, author, tagged_user)
+        reply_id = send_error_reply(agent_executor, config, tweet_id, "zero_balance", address, domain, author, None, tagged_user)
         mention_memory.add_mention(
             tweet_id, 
             tweet_text, 
@@ -834,7 +831,7 @@ def initialize_agent():
 
     balance = get_eth_balance(wallet.default_address.address_id)
     if balance < NFT_PRICE * Decimal("1.5") and network_id == "base-mainnet":
-        print(f"Wallet balance is too low: {balance}. Please fund {wallet.default_address.address_id} with at least {NFT_PRICE * Decimal('1.5') - Decimal(balance)} ETH.")
+        print(f"Wallet balance is too low: {balance}. Please fund {wallet.default_address.address_id} with at least {NFT_PRICE * Decimal('1.5') - balance} ETH.")
         exit(0) 
     #check_reputation(wallet.default_address.address_id)
     #private_key = wallet.default_address.export()
