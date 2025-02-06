@@ -424,9 +424,23 @@ def get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id
 def is_valid_mint_request_with_feedback(tweet_text):
     """Check if tweet contains an address or ENS domain and provide feedback."""
     
-    # Check for tagged user (ignore @XoninNFT)
+    # Split text into words and find where leading mentions end
+    words = tweet_text.split()
+    message_start = 0
+    
+    # Count leading mentions (words that start with @ and are separated by single space)
+    for i, word in enumerate(words):
+        if word.startswith('@'):
+            message_start = i + 1
+        else:
+            break
+    
+    # Join the rest as the actual message
+    actual_message = ' '.join(words[message_start:])
+    
+    # Check for tagged user in actual message (ignore @XoninNFT)
     tagged_user = None
-    for match in re.finditer(r'@(\w+)', tweet_text):
+    for match in re.finditer(r'@(\w+)', actual_message):
         username = match.group(1)
         if username != "XoninNFT":  # Skip XoninNFT mentions
             tagged_user = username
@@ -439,7 +453,7 @@ def is_valid_mint_request_with_feedback(tweet_text):
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, tweet_text)
+        match = re.search(pattern, actual_message)
         if match:
             # If ENS domain, try to resolve 
             address = match.group(0)            
@@ -965,6 +979,7 @@ def run_chat_mode(agent_executor, config):
 
 def main():
     """Start the chatbot agent."""
+
     agent_executor, wallet, config, tools, twitter_wrapper = initialize_agent()  # Get twitter_wrapper from initialize_agent
 
     #run_chat_mode(agent_executor=agent_executor, config=config)
