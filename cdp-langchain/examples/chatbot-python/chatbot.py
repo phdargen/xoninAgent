@@ -150,12 +150,12 @@ class MentionMemory:
 
 # Helper onchain functions
 # ---------
-def get_eth_balance(wallet: Wallet, address: str):
+def get_eth_balance(address: str):
     """Check if address has non-zero ETH balance using CDP SDK."""
     try:
         # Create Address object for the given address
         addr = Address(
-            network_id=wallet.network_id,
+            network_id="base-mainnet",
             address_id=address
         )
         # Get ETH balance
@@ -176,7 +176,7 @@ def check_reputation(address: str, max_retries=2, delay=30) -> AddressReputation
                 address_id=address
             )
             reputation = addr.reputation()
-            print(f"Reputation for {address}: {reputation}")
+            print(f"Reputation for {address}: {reputation}. \n")
             return reputation
         except Exception as e:
             print(f"Error checking reputation (attempt {attempt + 1}/{max_retries + 1}): {e}")
@@ -426,42 +426,51 @@ def get_all_mentions(account_mentions_tool, account_id, max_results=10, since_id
 
 def is_valid_mint_request_with_feedback(tweet_text):
     """Check if tweet contains an address or ENS domain and provide feedback."""
-    # Search for 0x address or .eth/.base.eth domain
+    
+    # Check for tagged user (ignore @XoninNFT)
+    tagged_user = None
+    for match in re.finditer(r'@(\w+)', tweet_text):
+        username = match.group(1)
+        if username != "XoninNFT":  # Skip XoninNFT mentions
+            tagged_user = username
+            break  # Take first non-XoninNFT tag
+
+    # Search for 0x address or .eth domain
     patterns = [
         r"0x[a-fA-F0-9]{40}",  # ETH address
-        r"@?(\S+\.eth)\b",     # .eth domain, optionally with @
+        r"\S+\.eth\b",         # .eth domain 
     ]
     
     for pattern in patterns:
         match = re.search(pattern, tweet_text)
         if match:
-            # Get the address, using capture group if present (for ENS domains)
-            address = match.group(1) if '.eth' in pattern else match.group(0)
-            
-            # If it's an ENS domain, try to resolve it
+            # If ENS domain, try to resolve 
+            address = match.group(0)            
             domain = None
             if '.eth' in address:
                 try:
                     resolved, domain = resolve_ens(address)
                     if not resolved:
-                        return address, domain, "invalid_address"
+                        return address, domain, "invalid_address", tagged_user
                     address = resolved
                 except Exception as e:
                     print(f"Error resolving ENS domain: {e}")
-                    return address, domain, "invalid_address"
+                    return address, domain, "invalid_address", tagged_user
             
             # Validate the address
             if not is_address(address):
-                return address, domain, "invalid_address"
+                return address, domain, "invalid_address", tagged_user
                 
-            return address, domain, "valid"
+            return address, domain, "valid", tagged_user
     
-    return None, None, None
+    return None, None, None, tagged_user
 
-def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_address, domain, twitter_wrapper, author=None, reputation: AddressReputation=None):
+def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_address, domain, twitter_wrapper, author=None, reputation: AddressReputation=None, tagged_user=None):
     """Process an NFT mint request."""
-    # Mint NFT
+
     print(f"Starting mint process for {eth_address}...")
+
+    # Mint NFT
     mint_result = mint_myNft(wallet, eth_address)
     print(f"Mint response: {mint_result}")
     
@@ -516,8 +525,8 @@ def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_a
 
     # Send reply with greeting 
     greeting = f"@{author}" if author else ""
-    if author == ADMIN_NAME and domain:
-        greeting = f"{domain}" 
+    if author == ADMIN_NAME and tagged_user:
+        greeting = f"@{tagged_user}" 
 
     # Select reputation metric to praise (optionally)
     metric_msg = ""
@@ -582,29 +591,29 @@ def process_mint_request(agent_executor, wallet: Wallet, config, tweet_id, eth_a
 
     return reply_id != None, txHash, reply_id, name
 
-def send_error_reply(agent_executor, config, tweet_id, error_type, address=None, domain=None, author=None, reputation: AddressReputation=None):
+def send_error_reply(agent_executor, config, tweet_id, error_type, address=None, domain=None, author=None, reputation: AddressReputation=None, tagged_user=None):
     """Send error reply tweet and return reply ID if successful."""
-    greeting = f"Hey @{author}! " if author else ""
-    if author == ADMIN_NAME and domain:
-        greeting = f"{domain} " 
+    greeting = f"@{author}" if author else ""
+    if author == ADMIN_NAME and tagged_user:
+        greeting = f"@{tagged_user}" 
     
     print(f"Sending error reply for {error_type}...")
     if error_type == "invalid_address":
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"'{greeting}Sorry, the address {address} is not a valid. "
+            f"'Hey {greeting}! Sorry, the address {address} is not a valid. "
             "Please make sure to provide a valid eth address or ENS/basename. You can always mint your NFT at https://xonin.vercel.app/.' Be creative in conveying this message!"
         )
     elif error_type == "zero_balance":
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"'{greeting}Sorry, the address {address} has 0 ETH balance. Please provide an active address. You can always mint your NFT at https://xonin.vercel.app/.'"
-            f"Or more humorously like: 'Haiyaa {author}, why so poor? Get some ETH first.' Be creative in conveying this message!"
+            f"'Hey {greeting}! Sorry, the address {address} has 0 ETH balance on @base. Please provide an active address. You can always mint your NFT at https://xonin.vercel.app/.'"
+            f"Or more humorously like: 'Haiyaa {greeting}, why so poor? Get some ETH on @base first.' Be creative in conveying this message!"
         )
     elif error_type == "already_minted":
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"'{greeting}You have already minted an NFT. "
+            f"'Hey {greeting}! You have already minted an NFT. "
             "This is limited to 1 NFT per user or address, don't be greedy! You can mint another one yourself at https://xonin.vercel.app/.' Be creative in conveying this message!"
         )
     elif error_type == "low_reputation":
@@ -637,13 +646,9 @@ def send_error_reply(agent_executor, config, tweet_id, error_type, address=None,
                 metric_msg = f" You may also use this info to suggest the user how to improve the score: '{value} {key}' or just say: 'Go mint yourself at https://xonin.vercel.app/.'"
         print(f"Metric message: {metric_msg}")
 
-        greeting = f" @{author}" if author else ""
-        if author == ADMIN_NAME and domain:
-            greeting = f" {domain}" 
-
         reply_prompt = (
             f"Use post_tweet_reply to reply to tweet {tweet_id} with a message like:\n"
-            f"'Haiyaa{greeting}, your onchain reputation score is only {reputation.score}. Why so low?"
+            f"'Haiyaa {greeting}, your onchain reputation score is only {reputation.score}. Why so low?"
             f"Sorry, no free NFT for you.'"
             f"{metric_msg}."
             f"Be creative in conveying this message! If you get '403 Forbidden' error, try again ensuring the message is below 280 characters!"
@@ -686,7 +691,7 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
     print(f"Processing tweet from @{author}")
      
     # Check if it's a mint request and validate address
-    address, domain, status = is_valid_mint_request_with_feedback(tweet_text)
+    address, domain, status, tagged_user = is_valid_mint_request_with_feedback(tweet_text)
     
     if address is None:
         # Don't save not_mint_request mentions
@@ -694,7 +699,7 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
         
     if status == "invalid_address":
         print(f"Invalid address found: {address}")
-        reply_id = send_error_reply(agent_executor, config, tweet_id, "invalid_address", address, domain, author)
+        reply_id = send_error_reply(agent_executor, config, tweet_id, "invalid_address", address, domain, author, tagged_user)
         mention_memory.add_mention(
             tweet_id, 
             tweet_text, 
@@ -708,12 +713,12 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
         return True
         
     # Check ETH balance
-    balance = get_eth_balance(wallet, address)
+    balance = get_eth_balance(address)
     if balance is None:
         return False
     if balance == 0:
         print(f"Zero balance address found: {address}")
-        reply_id = send_error_reply(agent_executor, config, tweet_id, "zero_balance", address, domain, author)
+        reply_id = send_error_reply(agent_executor, config, tweet_id, "zero_balance", address, domain, author, tagged_user)
         mention_memory.add_mention(
             tweet_id, 
             tweet_text, 
@@ -737,7 +742,7 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
 
     if reputation.score < REPUTATION_THRESHOLD:
         print(f"Reputation score is too low: {reputation.score}")
-        reply_id = send_error_reply(agent_executor, config, tweet_id, "low_reputation", address, domain, author, reputation)
+        reply_id = send_error_reply(agent_executor, config, tweet_id, "low_reputation", address, domain, author, reputation, tagged_user)
         mention_memory.add_mention(
             tweet_id,
             tweet_text,
@@ -756,7 +761,7 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
         previous_tweet_id = mention_memory.has_successful_mint(author_id, address)
         if previous_tweet_id:
             print(f"User @{author} or address {address} has already minted an NFT")
-            reply_id = send_error_reply(agent_executor, config, tweet_id, "already_minted", address, domain, author, reputation)
+            reply_id = send_error_reply(agent_executor, config, tweet_id, "already_minted", address, domain, author, reputation, tagged_user)
             mention_memory.add_mention(
                 tweet_id,
                 tweet_text,
@@ -770,7 +775,7 @@ def process_tweet(agent_executor, wallet: Wallet, config, tweet, mention_memory,
     # Address is valid and has balance + reputation -> mint nft
     print(f"Processing mint request for address: {address} and domain: {domain}")
     try:
-        mint_success, tx_hash, reply_id, name = process_mint_request(agent_executor, wallet, config, tweet_id, address, domain, twitter_wrapper, author, reputation)
+        mint_success, tx_hash, reply_id, name = process_mint_request(agent_executor, wallet, config, tweet_id, address, domain, twitter_wrapper, author, reputation, tagged_user)
         mention_memory.add_mention(
             tweet_id,
             tweet_text,
@@ -826,14 +831,14 @@ def initialize_agent():
 
     wallet = agentkit.wallet
     print(f"Wallet: {wallet}")
-    balance = get_eth_balance(wallet, wallet.default_address.address_id)
-    if balance < NFT_PRICE * Decimal("1.5"):
-        print(f"Wallet balance is too low: {balance}. Please fund your wallet with at least {NFT_PRICE * Decimal('1.5')} ETH.")
-        exit(0)
-    #score, metadata = 
+
+    balance = get_eth_balance(wallet.default_address.address_id)
+    if balance < NFT_PRICE * Decimal("1.5") and network_id == "base-mainnet":
+        print(f"Wallet balance is too low: {balance}. Please fund {wallet.default_address.address_id} with at least {NFT_PRICE * Decimal('1.5') - Decimal(balance)} ETH.")
+        exit(0) 
     #check_reputation(wallet.default_address.address_id)
     #private_key = wallet.default_address.export()
-
+    
     # Initialize Twitter wrapper using the existing TwitterApiWrapper
     values = {}
     twitter_wrapper = TwitterApiWrapper(**values)    
@@ -968,7 +973,7 @@ def main():
     #run_chat_mode(agent_executor=agent_executor, config=config)
     run_autonomous_mode(agent_executor=agent_executor, wallet=wallet, config=config, tools=tools, twitter_wrapper=twitter_wrapper,interval=-1)
     #save_svg_to_png("test", 34, "<svg width='500' height='500' viewBox='0 0 500 500' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'><radialGradient id='g0' r='1' spreadMethod='reflect'><stop offset='0%' style='stop-color:#f7af63;stop-opacity:0.39'/><stop offset='100%' style='stop-color:#f7af63;stop-opacity:1'/></radialGradient><radialGradient id='g1' r='1' spreadMethod='reflect'><stop offset='0%' style='stop-color:#633d2e;stop-opacity:0.61'/><stop offset='100%' style='stop-color:#633d2e;stop-opacity:1'/></radialGradient><radialGradient id='g2' r='1' spreadMethod='reflect'><stop offset='0%' style='stop-color:#ddd9ab;stop-opacity:0.57'/><stop offset='100%' style='stop-color:#ddd9ab;stop-opacity:1'/></radialGradient><filter id='f1' width='200%' height='200%'><feOffset in='SourceGraphic' result='r' dx='40' dy='40' /><feGaussianBlur in='r' result='rb' stdDeviation='3'/><feMerge><feMergeNode in='rb' /><feMergeNode in='SourceGraphic' /></feMerge></filter><symbol id='p' viewBox='0 0 500 500'><path fill='url(#g0)' d='M250 250 s 45 -35 -28 -42 -18 -33 -34 22 -37 -12 -20 -47 -35 -12 -32 18 -49 43 18 -24 -35 26 49 -24 -17 -47 31 19 -47 -49 32 43 -36 -16 -43 -37 -46 41 40 -25 45 11 -20 19 -28 -31 24 49 14 13 46 -39 -35 -32 -38 -36 -43 -38 -29 21 -48 15 -34 33 -22 -37 -15 40 -46 -16 18 41 33 -44 -33 44 -41 29 25 13 -26 31 -30 -23 -26 -29 49 38 49 15 43 19 -25 48 -22 -26 -29 45 11 -44 -26 -26 -10 35 -44 -39 -26 -29 33 -34 12 -37 -11 -16 48 23 -20 -45 -40 -15 -43 -33 29 -12 34 22 -34 25 -29 20 -14 -40 -19 16 -14 -20 -29 -33 -37 33 34 -13 -41 29 -25 47 -33 -24 -20 48 25 43 35 39 -25 -14 10 11 -48 47 -30 35 -42 29 -17 -33 -16 -38 46 -40 12 15 -33 -26 44 27 -16 23 -40 15 -17 33 -26 -16 -17 11 -27 31 38 -19 -38 -24 25 25 -36 35 18 20 21 22 34 -30 -43 15 33 -18 22 -14 19 34 -41 39 -25 -38 -40 -15 -38 -23 24 30'/><path fill='url(#g1)' d='M250 250 s 38 25 -11 27 -22 11 -30 -12 23 -33 28 15 14 -26 -47 -49 35 48 -14 30 -28 -11 22 -10 45 -48 25 -49 26 48 -23 -45 36 40 -29 -44 -36 35 -23 -12 -43 11 -18 34 45 43 17 -25 31 -23 -18 -45 22 -33 12 -27 -30 11 -42 28 32 -29 19 -29 -31 -42 -31 -24 31 -18 30 27 24 37 33 11 47 -23 24 18 47 44 14 19 49 38 -41 26 30 11 12 10 -30 28 -46 17 -31 -28 10 -14 43 -32 26 27 34 -31 11 31 26 -26 25 -37 29 -28 -35 13 -25 49 20 -41 -42 39 -26 19 10 -37 46 22 35 -11 35 34 21 -49 45 17 -30 26 21 -48 31 -47 -34 23 -30 31 -16 -49 33 -16 41 24 -13 -26 -36 -43 18 35 37 -14 21 22 46 -29 34 -13 -11 37 29 -36 39 24 -22 38 41 28 48 29 -30 -27 24 -43 -25 -11 15 23 -32 49 19 21 11 41 11 -45 -11 -36 -16 10 -26 -23 -35 43 30 13 -22 32 -34 17 26 -47 -22 -37 11 -40 46 11 -49 24 38 12 -49 -26 21 18 19 -41 22 -19 -19 -33 33 -12 -15 43 41 29'/><path fill='url(#g2)' d='M250 250 s 36 -29 32 -43 -159 -178 -29 33 83 -104 -144 -177 -41 -154 -105 -198 -156 174 -186 -19 123 -88 -181 -75 169 -144 195 -103 -121 -195 -35 -33 19 -126 -74 170 -52 70 -187 70 -108 75 91 -61 -12 -122 192 -75 -193 -15 169 -43 -125 -19 15 -145 63 49 -72 -66 142 -187 -153 108 -13 58 -13 59 99 -175 105 -191 -164 128 -142 50 -49 -167 147 -141 -139 -22 -85 29 20 -37 -39 -178 153 97 -184 -17 -187 -31 -30 -86 14 -35 -50 102 -34 -112 189 -167 -96 -197 -86 -21 -50 115 125 -162 183 -145 27 -44 184 -67 -186 -78 -52 -13 -88 59'/></symbol><g fill='#9cddc8'><rect width='500' height='500' /><use href='#p'/></g></svg>")
-
+    
 if __name__ == "__main__":
     print("Starting NFT Minting Agent...")
     main()
