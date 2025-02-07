@@ -56,6 +56,7 @@ def account_mentions(client: tweepy.Client, account_id: str, since_id: str | Non
     try:
         params = {
             "expansions": "author_id",
+            # "expansions": ["author_id", "referenced_tweets.id"],
             "user_fields": ["username"]
         }
         if max_results:

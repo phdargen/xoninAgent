@@ -922,6 +922,7 @@ def run_autonomous_mode(agent_executor, wallet: Wallet, config, tools, twitter_w
             for tweet in all_tweets:
                 if process_tweet(agent_executor, wallet, config, tweet, mention_memory, twitter_wrapper):
                     mentions_found = True
+                    time.sleep(20)
 
             # Update last_tweet_id after processing
             mention_memory.update_last_tweet_id(all_tweets)
