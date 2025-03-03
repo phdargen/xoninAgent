@@ -1,4 +1,4 @@
-# XoninBot
+# Xonin Agent
 
 A X (Twitter) AI agent ([@XoninNFT](https://twitter.com/XoninNFT)) that analyzes user blockchain activity 
 and awards unique generative NFTs based on their ([onchain reputation score](https://docs.cdp.coinbase.com/reputation/docs/welcome)).
@@ -10,7 +10,7 @@ and is built using [CDP AgentKit](https://github.com/coinbase/agentkit).
 XoninBot is an autonomous AI agent with the following features:
 
 - **Twitter Integration**: Automatically monitors mentions and processes NFT mint requests
-- **On-chain Analysis**: Evaluates wallet addresses to determine reputation score
+- **Onchain Analysis**: Evaluates wallet addresses to determine reputation score
 - **Generative NFT**: Mints unique SVG-based NFTs
 - **Address Resolution**: Support for ENS domains and direct Ethereum addresses
 - **Autonomous Operation**: Fully automated workflow from Twitter interaction to NFT minting, with response messages containing transaction details and NFT preview images
@@ -20,10 +20,13 @@ The agents runs on a daily schedule via GitHub Actions (limited by X free tier A
 ## NFT examples
 
 <div align="center">
-  <img src="examples/output_0x15077415012b6f5a6f2842928886b51e0e2cb2d6_43.png" width="250" alt="XoninNFT Example 1" />
-  <img src="examples/output_0x15077415012b6f5a6f2842928886b51e0e2cb2d6_46.png" width="250" alt="XoninNFT Example 2" />
-  <img src="examples/output_0xd58b1248d893f6dc0f93d7c1a12deed75bee3785_22.png" width="250" alt="XoninNFT Example 3" />
-  <img src="examples/output_0xd58b1248d893f6dc0f93d7c1a12deed75bee3785_33.png" width="250" alt="XoninNFT Example 4" />
+  <img src="cdp-langchain/examples/chatbot-python/output_0x15077415012b6f5a6f2842928886b51e0e2cb2d6_43.png" width="250" alt="XoninNFT Example 1" />
+  <img src="cdp-langchain/examples/chatbot-python/output_0x15077415012b6f5a6f2842928886b51e0e2cb2d6_46.png" width="250" alt="XoninNFT Example 2" />
+</div>
+
+<div align="center">
+  <img src="cdp-langchain/examples/chatbot-python/output_0xd58b1248d893f6dc0f93d7c1a12deed75bee3785_22.png" width="250" alt="XoninNFT Example 3" />
+  <img src="cdp-langchain/examples/chatbot-python/output_0xd58b1248d893f6dc0f93d7c1a12deed75bee3785_33.png" width="250" alt="XoninNFT Example 4" />
 </div>
 
 ## Architecture
@@ -64,7 +67,6 @@ The bot runs automatically via GitHub Actions every day at 12:00 UTC.
 ### Manual Operation
 You can run the bot manually with:
 ```bash
-poetry install
 cd agentkit/cdp-langchain/examples/chatbot-python
 poetry run python chatbot.py
 ```
