@@ -1,6 +1,5 @@
 # Xonin Agent
-
-A X (Twitter) AI agent ([@XoninNFT](https://twitter.com/XoninNFT)) that analyzes user blockchain activity 
+A X (Twitter) AI agent ([@XoninNFT](https://x.com/XoninNFT)) that analyzes user blockchain activity 
 and awards unique generative NFTs based on their ([onchain reputation score](https://docs.cdp.coinbase.com/reputation/docs/welcome)).
 This project connects to [Xonin](https://xonin.vercel.app/), a fully onchain generative art project ([GitHub](https://github.com/phdargen/onChainArt)),
 and is built using [CDP AgentKit](https://github.com/coinbase/agentkit).
